@@ -79,3 +79,36 @@ async def test_agent_no_tool_call_goes_to_end(mock_llm, safe_registry):
 
     assert result["messages"][-1].content == "안녕하세요!"
     assert mock_llm.ainvoke.call_count == 1
+
+
+@pytest.mark.asyncio
+async def test_safe_tool_e2e_via_websocket(workspace):
+    """WebSocket → Agent → Safe Tool → Response 전체 흐름."""
+    from fastapi.testclient import TestClient
+    from gp_claw.server import create_app
+    from gp_claw.tools import create_tool_registry
+
+    (workspace / "memo.txt").write_text("회의는 3시입니다")
+
+    mock_llm = MagicMock()
+    mock_llm.bind_tools = MagicMock(return_value=mock_llm)
+    mock_llm.ainvoke = AsyncMock(side_effect=[
+        AIMessage(
+            content="",
+            tool_calls=[{"name": "file_read", "args": {"path": "memo.txt"}, "id": "c1"}],
+        ),
+        AIMessage(content="메모 내용: 회의는 3시입니다"),
+    ])
+
+    registry = create_tool_registry(str(workspace))
+    # safe_tools만 등록 (dangerous 제외)
+    safe_only = ToolRegistry(safe_tools=registry.safe_tools)
+
+    app = create_app(llm=mock_llm, registry=safe_only)
+    client = TestClient(app)
+
+    with client.websocket_connect("/ws/e2e-test") as ws:
+        ws.send_json({"type": "user_message", "content": "memo.txt 읽어줘"})
+        data = ws.receive_json()
+        assert data["type"] == "assistant_message"
+        assert "회의는 3시" in data["content"]
