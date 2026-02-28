@@ -11,3 +11,10 @@ def settings():
         vllm_model_name="test-model",
         workspace_root="/tmp/gp_claw_test",
     )
+
+
+@pytest.fixture
+def workspace(tmp_path):
+    ws = tmp_path / "workspace"
+    ws.mkdir()
+    return ws
