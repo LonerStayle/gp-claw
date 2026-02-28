@@ -112,3 +112,109 @@ async def test_safe_tool_e2e_via_websocket(workspace):
         data = ws.receive_json()
         assert data["type"] == "assistant_message"
         assert "회의는 3시" in data["content"]
+
+
+# --- Phase 2C: Approval tests ---
+
+from gp_claw.tools.dangerous_file import create_dangerous_file_tools
+from langgraph.types import Command
+
+
+@pytest.fixture
+def full_registry(workspace):
+    return ToolRegistry(
+        safe_tools=create_safe_file_tools(str(workspace)),
+        dangerous_tools=create_dangerous_file_tools(str(workspace)),
+    )
+
+
+@pytest.mark.asyncio
+async def test_dangerous_tool_triggers_interrupt(workspace, mock_llm, full_registry):
+    """Dangerous 도구 호출 시 interrupt 발생."""
+    mock_llm.ainvoke = AsyncMock(side_effect=[
+        AIMessage(
+            content="",
+            tool_calls=[{
+                "name": "file_write",
+                "args": {"path": "out.txt", "content": "hello"},
+                "id": "call_1",
+            }],
+        ),
+        AIMessage(content="파일을 작성했습니다."),
+    ])
+
+    checkpointer = MemorySaver()
+    graph = create_agent(mock_llm, registry=full_registry, checkpointer=checkpointer)
+    config = {"configurable": {"thread_id": "approval-test-1"}}
+
+    # 첫 invoke: interrupt에서 멈춤
+    result = await graph.ainvoke(
+        {"messages": [HumanMessage(content="out.txt에 hello 써줘")]},
+        config,
+    )
+
+    state = await graph.aget_state(config)
+    assert state.next  # 그래프가 중단됨 (pending nodes 있음)
+    assert state.tasks[0].interrupts[0].value["type"] == "approval_request"
+
+
+@pytest.mark.asyncio
+async def test_approval_approved_executes_tool(workspace, mock_llm, full_registry):
+    """승인 후 Dangerous 도구가 실행됨."""
+    mock_llm.ainvoke = AsyncMock(side_effect=[
+        AIMessage(
+            content="",
+            tool_calls=[{
+                "name": "file_write",
+                "args": {"path": "out.txt", "content": "approved content"},
+                "id": "call_1",
+            }],
+        ),
+        AIMessage(content="파일을 작성했습니다."),
+    ])
+
+    checkpointer = MemorySaver()
+    graph = create_agent(mock_llm, registry=full_registry, checkpointer=checkpointer)
+    config = {"configurable": {"thread_id": "approval-test-2"}}
+
+    await graph.ainvoke(
+        {"messages": [HumanMessage(content="out.txt에 써줘")]},
+        config,
+    )
+
+    # 승인
+    result = await graph.ainvoke(Command(resume="approved"), config)
+
+    assert (workspace / "out.txt").read_text() == "approved content"
+    assert result["messages"][-1].content == "파일을 작성했습니다."
+
+
+@pytest.mark.asyncio
+async def test_approval_rejected_skips_tool(workspace, mock_llm, full_registry):
+    """거부 시 도구 실행 안 됨."""
+    mock_llm.ainvoke = AsyncMock(side_effect=[
+        AIMessage(
+            content="",
+            tool_calls=[{
+                "name": "file_write",
+                "args": {"path": "out.txt", "content": "bad"},
+                "id": "call_1",
+            }],
+        ),
+        AIMessage(content="작업이 취소되었습니다."),
+    ])
+
+    checkpointer = MemorySaver()
+    graph = create_agent(mock_llm, registry=full_registry, checkpointer=checkpointer)
+    config = {"configurable": {"thread_id": "approval-test-3"}}
+
+    await graph.ainvoke(
+        {"messages": [HumanMessage(content="out.txt에 써줘")]},
+        config,
+    )
+
+    # 거부
+    result = await graph.ainvoke(Command(resume="rejected"), config)
+
+    assert not (workspace / "out.txt").exists()  # 파일 생성 안 됨
+    assert result["messages"][-1].content == "작업이 취소되었습니다."
