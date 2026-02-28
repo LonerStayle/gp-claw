@@ -3,6 +3,7 @@ import uvicorn
 from gp_claw.config import Settings
 from gp_claw.llm import create_llm
 from gp_claw.server import create_app
+from gp_claw.tools import create_tool_registry
 
 
 def main():
@@ -15,7 +16,8 @@ def main():
     else:
         print("No LLM configured — running in echo mode")
 
-    app = create_app(llm=llm)
+    registry = create_tool_registry(str(settings.workspace_root))
+    app = create_app(llm=llm, registry=registry)
     uvicorn.run(app, host=settings.host, port=settings.port)
 
 

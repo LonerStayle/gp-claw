@@ -6,19 +6,24 @@ from langchain_openai import ChatOpenAI
 from langgraph.checkpoint.memory import MemorySaver
 
 from gp_claw.agent import create_agent
+from gp_claw.tools.registry import ToolRegistry
 
 logger = logging.getLogger(__name__)
 
 
-def create_app(llm: ChatOpenAI | None = None) -> FastAPI:
+def create_app(
+    llm: ChatOpenAI | None = None,
+    registry: ToolRegistry | None = None,
+) -> FastAPI:
     """FastAPI 애플리케이션 생성.
 
     Args:
-        llm: LLM 인스턴스. None이면 에이전트 없이 에코 모드로 동작.
+        llm: LLM 인스턴스. None이면 에코 모드.
+        registry: ToolRegistry. None이면 도구 없는 대화 모드.
     """
-    app = FastAPI(title="GP Claw", version="0.1.0")
+    app = FastAPI(title="GP Claw", version="0.2.0")
     checkpointer = MemorySaver()
-    agent = create_agent(llm, checkpointer=checkpointer) if llm else None
+    agent = create_agent(llm, registry=registry, checkpointer=checkpointer) if llm else None
 
     @app.get("/health")
     async def health():
@@ -45,11 +50,34 @@ def create_app(llm: ChatOpenAI | None = None) -> FastAPI:
                             {"messages": [HumanMessage(content=content)]},
                             config,
                         )
+
+                        # Phase 2C: interrupt 처리 (approval 루프)
+                        state = await agent.aget_state(config)
+                        while state.next:
+                            interrupt_data = state.tasks[0].interrupts[0].value
+                            await websocket.send_json({
+                                "type": "approval_request",
+                                **interrupt_data,
+                            })
+
+                            response = await websocket.receive_json()
+                            if response.get("type") == "approval_response":
+                                decision = response.get("decision", "rejected")
+                            else:
+                                decision = "rejected"
+
+                            from langgraph.types import Command
+                            result = await agent.ainvoke(
+                                Command(resume=decision), config,
+                            )
+                            state = await agent.aget_state(config)
+
                         last_message = result["messages"][-1]
-                        await websocket.send_json({
-                            "type": "assistant_message",
-                            "content": last_message.content,
-                        })
+                        if hasattr(last_message, "content") and last_message.content:
+                            await websocket.send_json({
+                                "type": "assistant_message",
+                                "content": last_message.content,
+                            })
                     else:
                         await websocket.send_json({
                             "type": "assistant_message",
