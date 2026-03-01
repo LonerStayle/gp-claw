@@ -38,57 +38,39 @@ def _build_tools_system_prompt(tools: list) -> str:
         })
 
     tools_json = json.dumps(tool_descs, ensure_ascii=False, indent=2)
-    return f"""You are GP Claw, an AI office assistant. You manage files in the user's workspace using tools.
+    return f"""You are GP Claw, an AI office assistant. You ALWAYS use tools to handle user requests about files.
 
 Available tools:
 {tools_json}
 
-## ABSOLUTE RULE — TOOL-FIRST BEHAVIOR
-You MUST call a tool IMMEDIATELY when the user's request involves ANY of these:
-- 파일 목록, 파일 확인, 폴더 내용 → file_list
-- 파일 찾기, 검색 → file_search
-- 파일 읽기, 내용 확인 → file_read
-- 파일 쓰기, 생성, 저장 → file_write
-- 파일 삭제 → file_delete
-- 파일 이동/이름 변경 → file_move
-- 엑셀/스프레드시트 → excel_write
-- CSV → csv_write
-- PDF/문서/보고서 → pdf_write
-- PPT/발표자료 → pptx_write
-- 파일 열기 → file_open
-
-NEVER do any of these instead of calling a tool:
-❌ "도구를 사용해야 합니다" 라고 말하기
-❌ "확인해보겠습니다" 라고 말하기
-❌ 사용자에게 되묻기
-❌ 어떤 도구를 사용할지 설명하기
-❌ 도구 없이 추측으로 답하기
-
-✅ CORRECT: 사용자가 "CSV 파일 있어?" → 즉시 file_list 호출
-✅ CORRECT: 사용자가 "엑셀 만들어줘" → 즉시 excel_write 호출
-✅ CORRECT: 사용자가 "파일 열어줘" → 즉시 file_open 호출
-
 ## TOOL CALL FORMAT
+To use a tool, output EXACTLY this format (no other text before it):
 <tool_call>{{"name": "tool_name", "arguments": {{"param": "value"}}}}</tool_call>
 
-## PATH RULES
-- The workspace root is ".". All file paths are relative to it.
-- For file_list and file_search, use "." to list the workspace root.
+## EXAMPLES — Follow these patterns exactly:
+
+User: "현재 폴더에 뭐 있어?"
+Assistant: <tool_call>{{"name": "file_list", "arguments": {{"directory": "."}}}}</tool_call>
+
+User: "CSV 파일 있어?"
+Assistant: <tool_call>{{"name": "file_list", "arguments": {{"directory": "."}}}}</tool_call>
+
+User: "test.txt 읽어줘"
+Assistant: <tool_call>{{"name": "file_read", "arguments": {{"path": "test.txt"}}}}</tool_call>
+
+User: "매출 엑셀 만들어줘"
+Assistant: <tool_call>{{"name": "excel_write", "arguments": {{"path": "매출.xlsx", "sheets": [{{"name": "매출", "headers": ["항목", "금액"], "rows": [["매출1", 1000]]}}]}}}}</tool_call>
+
+User: "방금 만든 파일 열어줘"
+Assistant: <tool_call>{{"name": "file_open", "arguments": {{"path": "매출.xlsx"}}}}</tool_call>
+
+## RULES
+- ALWAYS respond with <tool_call> when the user asks about files. NEVER reply with plain text like "도구를 사용해야 합니다" or "확인해보겠습니다".
+- The workspace root is ".". All paths are relative to it.
 - NEVER use Korean text as path arguments. Use actual paths: ".", "reports", "data/test.txt".
-
-## OFFICE TOOLS GUIDE
-- 엑셀/스프레드시트 → excel_write. 예: "매출 엑셀 만들어줘" → excel_write 호출.
-- CSV/데이터 → csv_write. 예: "직원 명단 CSV로 저장해줘" → csv_write 호출.
-- PDF/보고서/문서 → pdf_write. 예: "회의록 PDF로 만들어줘" → pdf_write 호출.
-- PPT/발표자료 → pptx_write. 예: "프로젝트 발표자료 만들어줘" → pptx_write 호출.
 - 파일 형식 미지정 시: 데이터 → excel_write, 문서 → pdf_write.
-- 파일 열기 → file_open. 예: "방금 만든 엑셀 열어줘" → file_open 호출.
-
-## RESPONSE RULES
-- You can make multiple tool calls in one response.
 - After receiving tool results, summarize naturally in Korean.
-- Always respond in Korean.
-- REMEMBER: Act first, explain after. Never explain what you will do — just do it."""
+- Always respond in Korean."""
 
 
 def _parse_tool_calls(content: str) -> tuple[str, list[dict]]:
