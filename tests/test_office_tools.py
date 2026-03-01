@@ -30,6 +30,11 @@ def pptx_write(tools):
     return tools[3]
 
 
+@pytest.fixture
+def file_open(tools):
+    return tools[4]
+
+
 # --- excel_write ---
 
 
@@ -186,6 +191,27 @@ def test_pptx_write_blocks_outside_workspace(workspace, pptx_write):
         })
 
 
+# --- file_open ---
+
+
+def test_file_open_existing_file(workspace, file_open, monkeypatch):
+    (workspace / "test.txt").write_text("hello")
+    monkeypatch.setattr("gp_claw.tools.office_file._open_with_os", lambda p: None)
+    result = file_open.invoke({"path": "test.txt"})
+    assert result["action"] == "opened"
+    assert result["filename"] == "test.txt"
+
+
+def test_file_open_nonexistent_raises(workspace, file_open):
+    with pytest.raises(Exception):
+        file_open.invoke({"path": "no_such_file.txt"})
+
+
+def test_file_open_blocks_outside_workspace(workspace, file_open):
+    with pytest.raises(Exception):
+        file_open.invoke({"path": "/etc/passwd"})
+
+
 # --- Registry integration ---
 
 
@@ -198,11 +224,12 @@ def test_office_tools_in_registry(workspace):
     assert "csv_write" in tool_names
     assert "pdf_write" in tool_names
     assert "pptx_write" in tool_names
+    assert "file_open" in tool_names
 
 
 def test_office_tools_classified_as_dangerous(workspace):
     from gp_claw.tools import ToolSafety, create_tool_registry
 
     registry = create_tool_registry(str(workspace))
-    for name in ["excel_write", "csv_write", "pdf_write", "pptx_write"]:
+    for name in ["excel_write", "csv_write", "pdf_write", "pptx_write", "file_open"]:
         assert registry.classify(name) == ToolSafety.DANGEROUS
