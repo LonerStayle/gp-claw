@@ -10,12 +10,14 @@ export interface UserMessage {
   id: string
   type: "user"
   content: string
+  timestamp: number
 }
 
 export interface AssistantMessage {
   id: string
   type: "assistant"
   content: string
+  timestamp: number
 }
 
 export interface ApprovalRequestMessage {
@@ -23,12 +25,14 @@ export interface ApprovalRequestMessage {
   type: "approval_request"
   toolCalls: ToolCall[]
   status: "pending" | "approved" | "rejected"
+  timestamp: number
 }
 
 export interface ErrorMessage {
   id: string
   type: "error"
   content: string
+  timestamp: number
 }
 
 export type Message = UserMessage | AssistantMessage | ApprovalRequestMessage | ErrorMessage

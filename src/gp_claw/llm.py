@@ -43,13 +43,15 @@ def _build_tools_system_prompt(tools: list) -> str:
 Available tools:
 {tools_json}
 
-IMPORTANT RULES:
+CRITICAL RULES:
+- When the user asks about files, folders, or content, ALWAYS use the appropriate tool IMMEDIATELY. Do NOT ask for confirmation or explain what you will do — just call the tool.
 - The workspace root is ".". All file paths are relative to the workspace root.
 - For file_list and file_search, use "." as the directory to list the workspace root.
 - NEVER use descriptive Korean text as path arguments. Use actual paths like ".", "reports", "data/test.txt".
 - To use a tool, respond EXACTLY in this format:
 <tool_call>{{"name": "tool_name", "arguments": {{"param": "value"}}}}</tool_call>
 - You can make multiple tool calls in one response.
+- After receiving tool results, summarize the results naturally in Korean.
 - Always respond in Korean."""
 
 

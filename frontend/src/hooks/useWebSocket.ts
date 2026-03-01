@@ -53,7 +53,7 @@ export function useWebSocket(): UseWebSocketReturn {
           }
           return [
             ...prev,
-            { id: crypto.randomUUID(), type: "assistant", content: data.content },
+            { id: crypto.randomUUID(), type: "assistant", content: data.content, timestamp: Date.now() },
           ]
         })
         break
@@ -66,7 +66,7 @@ export function useWebSocket(): UseWebSocketReturn {
       case "assistant_message":
         setMessages((prev) => [
           ...prev,
-          { id: crypto.randomUUID(), type: "assistant", content: data.content },
+          { id: crypto.randomUUID(), type: "assistant", content: data.content, timestamp: Date.now() },
         ])
         setIsWaitingResponse(false)
         setIsWaitingApproval(false)
@@ -80,6 +80,7 @@ export function useWebSocket(): UseWebSocketReturn {
             type: "approval_request",
             toolCalls: data.tool_calls,
             status: "pending",
+            timestamp: Date.now(),
           },
         ])
         setIsWaitingResponse(false)
@@ -89,7 +90,7 @@ export function useWebSocket(): UseWebSocketReturn {
       case "error":
         setMessages((prev) => [
           ...prev,
-          { id: crypto.randomUUID(), type: "error", content: data.content },
+          { id: crypto.randomUUID(), type: "error", content: data.content, timestamp: Date.now() },
         ])
         setIsWaitingResponse(false)
         setIsWaitingApproval(false)
@@ -102,7 +103,7 @@ export function useWebSocket(): UseWebSocketReturn {
       case "workspace_error":
         setMessages((prev) => [
           ...prev,
-          { id: crypto.randomUUID(), type: "error", content: data.content },
+          { id: crypto.randomUUID(), type: "error", content: data.content, timestamp: Date.now() },
         ])
         break
 
@@ -159,7 +160,7 @@ export function useWebSocket(): UseWebSocketReturn {
       if (!content.trim()) return
       setMessages((prev) => [
         ...prev,
-        { id: crypto.randomUUID(), type: "user", content },
+        { id: crypto.randomUUID(), type: "user", content, timestamp: Date.now() },
       ])
       setIsWaitingResponse(true)
       send({ type: "user_message", content })
