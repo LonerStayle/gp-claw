@@ -16,7 +16,9 @@ def main():
     else:
         print("No LLM configured — running in echo mode")
 
-    registry = create_tool_registry(str(settings.workspace_root))
+    workspace = settings.workspace_root.expanduser()
+    workspace.mkdir(parents=True, exist_ok=True)
+    registry = create_tool_registry(str(workspace))
     app = create_app(llm=llm, registry=registry)
     uvicorn.run(app, host=settings.host, port=settings.port)
 

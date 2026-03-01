@@ -108,9 +108,9 @@ def create_agent(
 
     # 노드 등록
     graph.add_node("agent", agent_node)
-    graph.add_node("safe_tools", ToolNode(registry.safe_tools))
+    graph.add_node("safe_tools", ToolNode(registry.safe_tools, handle_tool_errors=True))
     graph.add_node("approval", approval_node)
-    graph.add_node("dangerous_tools", ToolNode(registry.all_tools))
+    graph.add_node("dangerous_tools", ToolNode(registry.all_tools, handle_tool_errors=True))
     graph.add_node("handle_rejection", handle_rejection)
 
     # 엣지

@@ -11,12 +11,12 @@ class Settings(BaseSettings):
 
     # Server
     host: str = "0.0.0.0"
-    port: int = 8000
-    workspace_root: Path = Path.home() / ".gp_claw" / "workspace"
+    port: int = 8002
+    workspace_root: Path = Path("~/.gp_claw/workspace")
 
     # LLM
     llm_temperature: float = 0.6
-    llm_max_tokens: int = 4096
+    llm_max_tokens: int = 1024
 
     @property
     def vllm_base_url(self) -> str:

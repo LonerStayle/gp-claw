@@ -46,37 +46,44 @@ def create_app(
                     content = data.get("content", "")
 
                     if agent:
-                        result = await agent.ainvoke(
-                            {"messages": [HumanMessage(content=content)]},
-                            config,
-                        )
-
-                        # Phase 2C: interrupt 처리 (approval 루프)
-                        state = await agent.aget_state(config)
-                        while state.next:
-                            interrupt_data = state.tasks[0].interrupts[0].value
-                            await websocket.send_json({
-                                "type": "approval_request",
-                                **interrupt_data,
-                            })
-
-                            response = await websocket.receive_json()
-                            if response.get("type") == "approval_response":
-                                decision = response.get("decision", "rejected")
-                            else:
-                                decision = "rejected"
-
-                            from langgraph.types import Command
+                        try:
                             result = await agent.ainvoke(
-                                Command(resume=decision), config,
+                                {"messages": [HumanMessage(content=content)]},
+                                config,
                             )
-                            state = await agent.aget_state(config)
 
-                        last_message = result["messages"][-1]
-                        if hasattr(last_message, "content") and last_message.content:
+                            # Phase 2C: interrupt 처리 (approval 루프)
+                            state = await agent.aget_state(config)
+                            while state.next:
+                                interrupt_data = state.tasks[0].interrupts[0].value
+                                await websocket.send_json({
+                                    "type": "approval_request",
+                                    **interrupt_data,
+                                })
+
+                                response = await websocket.receive_json()
+                                if response.get("type") == "approval_response":
+                                    decision = response.get("decision", "rejected")
+                                else:
+                                    decision = "rejected"
+
+                                from langgraph.types import Command
+                                result = await agent.ainvoke(
+                                    Command(resume=decision), config,
+                                )
+                                state = await agent.aget_state(config)
+
+                            last_message = result["messages"][-1]
+                            if hasattr(last_message, "content") and last_message.content:
+                                await websocket.send_json({
+                                    "type": "assistant_message",
+                                    "content": last_message.content,
+                                })
+                        except Exception as e:
+                            logger.error(f"Agent error: {e}", exc_info=True)
                             await websocket.send_json({
-                                "type": "assistant_message",
-                                "content": last_message.content,
+                                "type": "error",
+                                "content": f"LLM 오류: {e}",
                             })
                     else:
                         await websocket.send_json({
