@@ -45,6 +45,11 @@ def test_ws_dangerous_tool_sends_approval_request(workspace, mock_llm):
         # 승인
         ws.send_json({"type": "approval_response", "decision": "approved"})
 
+        # file_created 알림 (file_write가 action=created 반환)
+        data = ws.receive_json()
+        assert data["type"] == "file_created"
+        assert data["filename"] == "test.txt"
+
         # 최종 응답
         data = ws.receive_json()
         assert data["type"] == "assistant_chunk"

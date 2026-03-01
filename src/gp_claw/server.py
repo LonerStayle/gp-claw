@@ -201,7 +201,14 @@ def create_app(
 
                             # 도구 실행 결과에서 파일 생성 감지 → file_created 전송
                             final_state = await session_agent.aget_state(config)
-                            for msg in final_state.values.get("messages", []):
+                            all_msgs = final_state.values.get("messages", [])
+                            # 마지막 HumanMessage 이후의 메시지만 스캔
+                            recent_msgs = []
+                            for i in range(len(all_msgs) - 1, -1, -1):
+                                if isinstance(all_msgs[i], HumanMessage):
+                                    recent_msgs = all_msgs[i + 1:]
+                                    break
+                            for msg in recent_msgs:
                                 if hasattr(msg, "name") and hasattr(msg, "content"):
                                     try:
                                         import json as _json
