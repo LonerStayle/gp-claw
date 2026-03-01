@@ -54,6 +54,8 @@ def test_ws_dangerous_tool_sends_approval_request(workspace, mock_llm):
         data = ws.receive_json()
         assert data["type"] == "assistant_chunk"
         assert "작성" in data["content"]
+        title_ev = ws.receive_json()
+        assert title_ev["type"] == "room_title_updated"
         done = ws.receive_json()
         assert done["type"] == "assistant_done"
 
@@ -91,6 +93,8 @@ def test_ws_dangerous_tool_rejection(workspace, mock_llm):
         data = ws.receive_json()
         assert data["type"] == "assistant_chunk"
         assert "취소" in data["content"]
+        title_ev = ws.receive_json()
+        assert title_ev["type"] == "room_title_updated"
         done = ws.receive_json()
         assert done["type"] == "assistant_done"
 
@@ -125,5 +129,7 @@ def test_ws_safe_tool_no_approval_needed(workspace, mock_llm):
         data = ws.receive_json()
         assert data["type"] == "assistant_chunk"
         assert "내용입니다" in data["content"]
+        title_ev = ws.receive_json()
+        assert title_ev["type"] == "room_title_updated"
         done = ws.receive_json()
         assert done["type"] == "assistant_done"

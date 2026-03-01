@@ -19,5 +19,7 @@ def test_websocket_user_message_gets_agent_response():
         data = ws.receive_json()
         assert data["type"] == "assistant_chunk"
         assert "안녕하세요" in data["content"]
+        title_ev = ws.receive_json()
+        assert title_ev["type"] == "room_title_updated"
         done = ws.receive_json()
         assert done["type"] == "assistant_done"

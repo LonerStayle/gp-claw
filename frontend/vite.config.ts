@@ -19,6 +19,9 @@ export default defineConfig({
       '/health': {
         target: 'http://localhost:8002',
       },
+      '/rooms': {
+        target: 'http://localhost:8002',
+      },
     },
   },
 })

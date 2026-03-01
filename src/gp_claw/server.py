@@ -1,33 +1,25 @@
 import logging
+import re as _re
+from dataclasses import asdict
 from pathlib import Path
 from typing import Any
 
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
-from langchain_core.messages import HumanMessage
+from fastapi.responses import JSONResponse
+from langchain_core.messages import AIMessage, HumanMessage
 from langchain_openai import ChatOpenAI
 from langgraph.checkpoint.memory import MemorySaver
 from langgraph.types import Command
+from pydantic import BaseModel
 
 from gp_claw.agent import create_agent
+from gp_claw.rooms import RoomManager
 from gp_claw.tools import create_tool_registry
 from gp_claw.tools.registry import ToolRegistry
 
 logger = logging.getLogger(__name__)
 
 TOOL_TAG = "<tool_call>"
-THINK_OPEN = "<think>"
-THINK_CLOSE = "</think>"
-
-
-def _find_partial_match(text: str, *tags: str) -> int:
-    """text 끝부분에서 tags의 부분 매치가 시작되는 위치를 반환. 없으면 len(text)."""
-    flush_up_to = len(text)
-    for i in range(len(text)):
-        suffix = text[i:]
-        if any(tag.startswith(suffix) for tag in tags):
-            flush_up_to = i
-            break
-    return flush_up_to
 
 
 async def _stream_agent_response(
@@ -35,12 +27,10 @@ async def _stream_agent_response(
 ) -> bool:
     """에이전트 응답을 토큰 단위로 스트리밍.
 
-    <think> 태그 → thinking_start/thinking_chunk/thinking_done 으로 분리.
-    <tool_call> 태그 → 버퍼링 (프론트엔드에 안 보냄).
+    <tool_call> 태그가 감지되면 스트리밍을 중단하고 버퍼링합니다.
     Returns: True if any content was streamed to the client.
     """
     pending = ""
-    in_thinking = False
     tool_detected = False
     has_sent = False
 
@@ -56,79 +46,36 @@ async def _stream_agent_response(
 
         pending += chunk.content
 
-        # pending 버퍼를 반복 처리 (태그 발견 시 나머지 재처리)
-        changed = True
-        while changed and pending:
-            changed = False
+        # 완전한 <tool_call> 태그 발견
+        if TOOL_TAG in pending:
+            idx = pending.index(TOOL_TAG)
+            if idx > 0:
+                await websocket.send_json(
+                    {"type": "assistant_chunk", "content": pending[:idx]}
+                )
+                has_sent = True
+            tool_detected = True
+            continue
 
-            if in_thinking:
-                # </think> 완전 매치
-                if THINK_CLOSE in pending:
-                    idx = pending.index(THINK_CLOSE)
-                    if idx > 0:
-                        await websocket.send_json(
-                            {"type": "thinking_chunk", "content": pending[:idx]}
-                        )
-                    pending = pending[idx + len(THINK_CLOSE):]
-                    in_thinking = False
-                    await websocket.send_json({"type": "thinking_done"})
-                    has_sent = True
-                    changed = True  # 나머지 pending 재처리
-                else:
-                    # </think> 부분 매치 — 안전한 부분만 전송
-                    flush_up_to = _find_partial_match(pending, THINK_CLOSE)
-                    if flush_up_to > 0:
-                        await websocket.send_json(
-                            {"type": "thinking_chunk", "content": pending[:flush_up_to]}
-                        )
-                        pending = pending[flush_up_to:]
+        # <tool_call> 의 부분 매치 확인 — 매치 가능한 부분은 보류
+        flush_up_to = len(pending)
+        for i in range(len(pending)):
+            if TOOL_TAG.startswith(pending[i:]):
+                flush_up_to = i
+                break
 
-            else:
-                # <think> 완전 매치
-                if THINK_OPEN in pending:
-                    idx = pending.index(THINK_OPEN)
-                    if idx > 0:
-                        await websocket.send_json(
-                            {"type": "assistant_chunk", "content": pending[:idx]}
-                        )
-                        has_sent = True
-                    pending = pending[idx + len(THINK_OPEN):]
-                    in_thinking = True
-                    await websocket.send_json({"type": "thinking_start"})
-                    changed = True  # 나머지 pending 재처리
-
-                # <tool_call> 완전 매치
-                elif TOOL_TAG in pending:
-                    idx = pending.index(TOOL_TAG)
-                    if idx > 0:
-                        await websocket.send_json(
-                            {"type": "assistant_chunk", "content": pending[:idx]}
-                        )
-                        has_sent = True
-                    tool_detected = True
-                    break
-
-                else:
-                    # 부분 매치 — 안전한 부분만 전송
-                    flush_up_to = _find_partial_match(pending, THINK_OPEN, TOOL_TAG)
-                    if flush_up_to > 0:
-                        await websocket.send_json(
-                            {"type": "assistant_chunk", "content": pending[:flush_up_to]}
-                        )
-                        has_sent = True
-                        pending = pending[flush_up_to:]
+        if flush_up_to > 0:
+            await websocket.send_json(
+                {"type": "assistant_chunk", "content": pending[:flush_up_to]}
+            )
+            has_sent = True
+            pending = pending[flush_up_to:]
 
     # 스트리밍 종료 — 남은 pending 전송
     if not tool_detected and pending:
-        if in_thinking:
-            await websocket.send_json(
-                {"type": "thinking_chunk", "content": pending}
-            )
-            await websocket.send_json({"type": "thinking_done"})
-        else:
-            await websocket.send_json(
-                {"type": "assistant_chunk", "content": pending}
-            )
+        await websocket.send_json(
+            {"type": "assistant_chunk", "content": pending}
+        )
         has_sent = True
 
     return has_sent
@@ -150,16 +97,115 @@ def create_app(
     checkpointer = MemorySaver()
     default_agent = create_agent(llm, registry=registry, checkpointer=checkpointer) if llm else None
     default_workspace = workspace_root or str(Path("~/.gp_claw/workspace").expanduser().resolve())
+    room_manager = RoomManager()
 
+    # --- Pydantic models for request bodies ---
+    class RoomTitleBody(BaseModel):
+        title: str = "새 대화"
+
+    # --- Health ---
     @app.get("/health")
     async def health():
         return {"status": "ok"}
+
+    # --- Room REST API ---
+    @app.get("/rooms")
+    async def list_rooms():
+        return [asdict(r) for r in room_manager.list_all()]
+
+    @app.post("/rooms", status_code=201)
+    async def create_room(body: RoomTitleBody | None = None):
+        title = body.title if body else "새 대화"
+        room = room_manager.create(title=title)
+        return asdict(room)
+
+    @app.get("/rooms/{room_id}")
+    async def get_room(room_id: str):
+        room = room_manager.get(room_id)
+        if not room:
+            return JSONResponse(status_code=404, content={"detail": "Room not found"})
+        return asdict(room)
+
+    @app.patch("/rooms/{room_id}")
+    async def update_room(room_id: str, body: RoomTitleBody):
+        room = room_manager.update_title(room_id, body.title)
+        if not room:
+            return JSONResponse(status_code=404, content={"detail": "Room not found"})
+        return asdict(room)
+
+    @app.delete("/rooms/{room_id}", status_code=204)
+    async def delete_room(room_id: str):
+        if not room_manager.delete(room_id):
+            return JSONResponse(status_code=404, content={"detail": "Room not found"})
+        # 체크포인터 데이터도 정리
+        try:
+            checkpointer.delete_thread(room_id)
+        except Exception:
+            pass
+
+    @app.get("/rooms/{room_id}/messages")
+    async def get_room_messages(room_id: str):
+        room = room_manager.get(room_id)
+        if not room:
+            return JSONResponse(status_code=404, content={"detail": "Room not found"})
+        if not default_agent:
+            return []
+        try:
+            state = await default_agent.aget_state(
+                {"configurable": {"thread_id": room_id}}
+            )
+            msgs = state.values.get("messages", [])
+        except Exception:
+            return []
+        result = []
+        tool_tag_re = _re.compile(r"</?tool_call>.*", _re.DOTALL)
+        for m in msgs:
+            if isinstance(m, HumanMessage):
+                result.append({"type": "user", "content": m.content})
+            elif isinstance(m, AIMessage) and m.content:
+                cleaned = tool_tag_re.sub("", m.content).strip()
+                if cleaned:
+                    result.append({"type": "assistant", "content": cleaned})
+        return result
 
     @app.websocket("/ws/{session_id}")
     async def websocket_endpoint(websocket: WebSocket, session_id: str):
         await websocket.accept()
         logger.info(f"WebSocket connected: session={session_id}")
+
         config = {"configurable": {"thread_id": session_id}}
+
+        async def _recover_thread():
+            """스트리밍 에러 시 오염된 체크포인트를 제거하고 대화 히스토리를 복원."""
+            if not session_agent:
+                return
+            # 1) 오염 직전까지의 정상 메시지 저장
+            try:
+                state = await session_agent.aget_state(config)
+                saved = list(state.values.get("messages", []))
+                # 마지막 HumanMessage(에러 유발)와 그 뒤 불완전 응답 제거
+                while saved and not isinstance(saved[-1], HumanMessage):
+                    saved.pop()
+                if saved:
+                    saved.pop()  # 에러 유발 HumanMessage도 제거
+            except Exception:
+                saved = []
+            # 2) 오염된 체크포인트 전체 삭제
+            thread_id = config["configurable"]["thread_id"]
+            try:
+                checkpointer.delete_thread(thread_id)
+            except Exception:
+                pass
+            # 3) 정상 메시지 복원
+            if saved:
+                try:
+                    await session_agent.aupdate_state(config, {"messages": saved})
+                except Exception:
+                    pass
+            logger.warning(
+                f"Thread recovered: session={session_id}, "
+                f"preserved {len(saved)} messages"
+            )
 
         # 세션별 workspace 상태
         session_workspace = default_workspace
@@ -226,6 +272,12 @@ def create_app(
                 elif data.get("type") == "user_message":
                     content = data.get("content", "")
 
+                    # Room 자동 생성/갱신
+                    if not room_manager.get(session_id):
+                        room_manager.create(room_id=session_id)
+                    room_manager.touch(session_id)
+                    is_first_message = room_manager.get(session_id).title == "새 대화"
+
                     if session_agent:
                         try:
                             # 스트리밍 응답 (빈 스트림 시 1회 재시도)
@@ -249,25 +301,34 @@ def create_app(
 
                             # interrupt 처리 (approval 루프)
                             state = await session_agent.aget_state(config)
-                            while state.next:
-                                interrupt_data = state.tasks[0].interrupts[0].value
-                                await websocket.send_json({
-                                    "type": "approval_request",
-                                    **interrupt_data,
-                                })
+                            try:
+                                while state.next:
+                                    interrupt_data = state.tasks[0].interrupts[0].value
+                                    await websocket.send_json({
+                                        "type": "approval_request",
+                                        **interrupt_data,
+                                    })
 
-                                response = await websocket.receive_json()
-                                if response.get("type") == "approval_response":
-                                    decision = response.get("decision", "rejected")
-                                else:
+                                    # 승인 응답 대기 (approval_response 외 모든 메시지 무시)
                                     decision = "rejected"
+                                    while True:
+                                        response = await websocket.receive_json()
+                                        if response.get("type") == "approval_response":
+                                            decision = response.get("decision", "rejected")
+                                            break
+                                        if response.get("type") == "ping":
+                                            await websocket.send_json({"type": "pong"})
+                                        # 그 외 메시지는 무시하고 계속 대기
 
-                                # resume도 스트리밍
-                                streamed = await _stream_agent_response(
-                                    session_agent, websocket,
-                                    Command(resume=decision), config,
-                                )
-                                state = await session_agent.aget_state(config)
+                                    # resume도 스트리밍
+                                    streamed = await _stream_agent_response(
+                                        session_agent, websocket,
+                                        Command(resume=decision), config,
+                                    )
+                                    state = await session_agent.aget_state(config)
+                            except Exception as loop_err:
+                                await _recover_thread()
+                                raise loop_err
 
                             # 도구 실행 결과에서 파일 생성 감지 → file_created 전송
                             final_state = await session_agent.aget_state(config)
@@ -300,13 +361,30 @@ def create_app(
                                 if msgs:
                                     last_msg = msgs[-1]
                                     if hasattr(last_msg, "content") and last_msg.content:
-                                        await websocket.send_json({
-                                            "type": "assistant_chunk",
-                                            "content": last_msg.content,
-                                        })
+                                        # <tool_call> 태그 제거 후 전송
+                                        import re as _re
+                                        fallback_text = _re.sub(
+                                            r"</?tool_call>.*", "", last_msg.content, flags=_re.DOTALL
+                                        ).strip()
+                                        if fallback_text:
+                                            await websocket.send_json({
+                                                "type": "assistant_chunk",
+                                                "content": fallback_text,
+                                            })
+
+                            # 자동 제목: 첫 메시지 앞 30자
+                            if is_first_message:
+                                auto_title = content[:30].strip() or "새 대화"
+                                room_manager.update_title(session_id, auto_title)
+                                await websocket.send_json({
+                                    "type": "room_title_updated",
+                                    "room_id": session_id,
+                                    "title": auto_title,
+                                })
 
                             await websocket.send_json({"type": "assistant_done"})
                         except ValueError as ve:
+                            await _recover_thread()
                             if "No generations found in stream" in str(ve):
                                 logger.warning(f"Empty LLM stream: {ve}")
                                 await websocket.send_json({
@@ -320,6 +398,7 @@ def create_app(
                                     "content": f"LLM 오류: {ve}",
                                 })
                         except Exception as e:
+                            await _recover_thread()
                             logger.error(f"Agent error: {e}", exc_info=True)
                             await websocket.send_json({
                                 "type": "error",
@@ -330,6 +409,15 @@ def create_app(
                             "type": "assistant_chunk",
                             "content": f"[에코] {content}",
                         })
+                        # 에코 모드에서도 자동 제목
+                        if is_first_message:
+                            auto_title = content[:30].strip() or "새 대화"
+                            room_manager.update_title(session_id, auto_title)
+                            await websocket.send_json({
+                                "type": "room_title_updated",
+                                "room_id": session_id,
+                                "title": auto_title,
+                            })
                         await websocket.send_json({"type": "assistant_done"})
 
                 else:

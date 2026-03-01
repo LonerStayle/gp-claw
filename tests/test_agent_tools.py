@@ -112,6 +112,8 @@ async def test_safe_tool_e2e_via_websocket(workspace):
         data = ws.receive_json()
         assert data["type"] == "assistant_chunk"
         assert "회의는 3시" in data["content"]
+        title_ev = ws.receive_json()
+        assert title_ev["type"] == "room_title_updated"
         done = ws.receive_json()
         assert done["type"] == "assistant_done"
 

@@ -70,18 +70,38 @@ def _build_tools_system_prompt(tools: list) -> str:
 - 경로는 항상 ".", "reports/data.csv" 같은 실제 경로를 사용하세요.
 - 파일 형식 미지정 시: 데이터 → excel_write, 문서 → pdf_write.
 - 도구 결과를 받으면 한국어로 자연스럽게 요약하세요.
-- 항상 한국어로 답하세요."""
+- 항상 한국어로 답하세요. 생각(<think>)도 반드시 한국어로 하세요.
+- 절대로 영어, 힌디어 등 다른 언어를 사용하지 마세요. 모든 출력은 한국어입니다."""
 
 
 def _parse_tool_calls(content: str) -> tuple[str, list[dict]]:
-    """응답 content에서 <tool_call> 태그를 파싱하여 tool_calls 리스트로 변환."""
-    pattern = r"<tool_call>(.*?)</tool_call>"
-    matches = re.findall(pattern, content, re.DOTALL)
+    """응답 content에서 <tool_call> 태그를 파싱하여 tool_calls 리스트로 변환.
+
+    닫는 태그(</tool_call>)가 없는 경우도 처리합니다.
+    """
+    # 1) 닫는 태그가 있는 경우
+    pattern_closed = r"<tool_call>(.*?)</tool_call>"
+    # 2) 닫는 태그 없이 <tool_call> 이후 끝까지
+    pattern_open = r"<tool_call>(.*?)$"
+
+    matches = re.findall(pattern_closed, content, re.DOTALL)
+    clean_content = re.sub(pattern_closed, "", content, flags=re.DOTALL).strip()
+
+    # 닫는 태그 매치가 없으면 열린 태그로 시도
+    if not matches:
+        matches = re.findall(pattern_open, content, re.DOTALL)
+        clean_content = re.sub(pattern_open, "", content, flags=re.DOTALL).strip()
 
     tool_calls = []
+    seen = set()
     for match in matches:
         try:
             parsed = json.loads(match.strip())
+            # 중복 tool call 제거 (같은 이름+인자 조합)
+            dedup_key = (parsed["name"], json.dumps(parsed.get("arguments", {}), sort_keys=True))
+            if dedup_key in seen:
+                continue
+            seen.add(dedup_key)
             tool_calls.append({
                 "id": f"call_{uuid.uuid4().hex[:8]}",
                 "name": parsed["name"],
@@ -90,8 +110,6 @@ def _parse_tool_calls(content: str) -> tuple[str, list[dict]]:
         except (json.JSONDecodeError, KeyError):
             continue
 
-    # tool_call 태그를 제거한 나머지 텍스트
-    clean_content = re.sub(pattern, "", content, flags=re.DOTALL).strip()
     return clean_content, tool_calls
 
 
@@ -212,13 +230,17 @@ class ToolParsingChatModel(ChatOpenAI):
 
         # 청크를 모으면서 스트리밍
         full_content = ""
+        has_native_tool_calls = False
         async for chunk in super()._astream(messages, stop=stop, run_manager=run_manager, **kwargs):
-            if isinstance(chunk.message, AIMessageChunk) and chunk.message.content:
-                full_content += chunk.message.content
+            if isinstance(chunk.message, AIMessageChunk):
+                if chunk.message.content:
+                    full_content += chunk.message.content
+                if chunk.message.tool_call_chunks:
+                    has_native_tool_calls = True
             yield chunk
 
-        # 스트리밍 완료 후 tool_call 파싱
-        if full_content:
+        # 스트리밍 완료 후 tool_call 파싱 (네이티브 tool_call이 없을 때만)
+        if full_content and not has_native_tool_calls:
             _, tool_calls = _parse_tool_calls(full_content)
             if tool_calls:
                 tc_msg = AIMessageChunk(

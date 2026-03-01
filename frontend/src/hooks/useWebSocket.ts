@@ -1,14 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from "react"
 import type { ConnectionStatus, Message, WsReceive, WsSend } from "@/types"
 
-function generateSessionId(): string {
-  const stored = sessionStorage.getItem("gp-claw-session-id")
-  if (stored) return stored
-  const id = crypto.randomUUID()
-  sessionStorage.setItem("gp-claw-session-id", id)
-  return id
-}
-
 interface UseWebSocketReturn {
   messages: Message[]
   connectionStatus: ConnectionStatus
@@ -21,7 +13,10 @@ interface UseWebSocketReturn {
   openFile: (path: string) => void
 }
 
-export function useWebSocket(): UseWebSocketReturn {
+export function useWebSocket(
+  roomId: string | null,
+  onRoomTitleUpdate?: (roomId: string, title: string) => void,
+): UseWebSocketReturn {
   const [messages, setMessages] = useState<Message[]>([])
   const [connectionStatus, setConnectionStatus] = useState<ConnectionStatus>("disconnected")
   const [isWaitingResponse, setIsWaitingResponse] = useState(false)
@@ -32,6 +27,12 @@ export function useWebSocket(): UseWebSocketReturn {
   const reconnectAttemptRef = useRef(0)
   const reconnectTimerRef = useRef<ReturnType<typeof setTimeout> | undefined>(undefined)
   const pingTimerRef = useRef<ReturnType<typeof setInterval> | undefined>(undefined)
+  const roomIdRef = useRef(roomId)
+  const onRoomTitleUpdateRef = useRef(onRoomTitleUpdate)
+
+  // Keep refs in sync
+  roomIdRef.current = roomId
+  onRoomTitleUpdateRef.current = onRoomTitleUpdate
 
   const send = useCallback((data: WsSend) => {
     if (wsRef.current?.readyState === WebSocket.OPEN) {
@@ -43,39 +44,6 @@ export function useWebSocket(): UseWebSocketReturn {
     const data: WsReceive = JSON.parse(event.data)
 
     switch (data.type) {
-      case "thinking_start":
-        setMessages((prev) => [
-          ...prev,
-          { id: crypto.randomUUID(), type: "thinking", content: "", isComplete: false, timestamp: Date.now() },
-        ])
-        break
-
-      case "thinking_chunk":
-        setMessages((prev) => {
-          const last = prev[prev.length - 1]
-          if (last?.type === "thinking") {
-            return [
-              ...prev.slice(0, -1),
-              { ...last, content: last.content + data.content },
-            ]
-          }
-          return prev
-        })
-        break
-
-      case "thinking_done":
-        setMessages((prev) => {
-          const last = prev[prev.length - 1]
-          if (last?.type === "thinking") {
-            return [
-              ...prev.slice(0, -1),
-              { ...last, isComplete: true },
-            ]
-          }
-          return prev
-        })
-        break
-
       case "assistant_chunk":
         setMessages((prev) => {
           const last = prev[prev.length - 1]
@@ -158,15 +126,32 @@ export function useWebSocket(): UseWebSocketReturn {
         ])
         break
 
+      case "room_title_updated":
+        onRoomTitleUpdateRef.current?.(data.room_id, data.title)
+        break
+
       case "pong":
         break
     }
   }, [])
 
-  const connect = useCallback(() => {
-    const sessionId = generateSessionId()
+  const cleanup = useCallback(() => {
+    if (reconnectTimerRef.current) clearTimeout(reconnectTimerRef.current)
+    if (pingTimerRef.current) clearInterval(pingTimerRef.current)
+    reconnectTimerRef.current = undefined
+    pingTimerRef.current = undefined
+    if (wsRef.current) {
+      wsRef.current.onclose = null // prevent reconnect
+      wsRef.current.close()
+      wsRef.current = null
+    }
+  }, [])
+
+  const connect = useCallback((rid: string) => {
+    cleanup()
+
     const protocol = window.location.protocol === "https:" ? "wss:" : "ws:"
-    const wsUrl = `${protocol}//${window.location.host}/ws/${sessionId}`
+    const wsUrl = `${protocol}//${window.location.host}/ws/${rid}`
 
     const ws = new WebSocket(wsUrl)
     wsRef.current = ws
@@ -186,25 +171,65 @@ export function useWebSocket(): UseWebSocketReturn {
       setConnectionStatus("disconnected")
       if (pingTimerRef.current) clearInterval(pingTimerRef.current)
 
-      const delay = Math.min(1000 * 2 ** reconnectAttemptRef.current, 30_000)
-      reconnectAttemptRef.current += 1
-      setConnectionStatus("reconnecting")
-      reconnectTimerRef.current = setTimeout(connect, delay)
+      // roomId가 여전히 같을 때만 재연결
+      if (roomIdRef.current === rid) {
+        const delay = Math.min(1000 * 2 ** reconnectAttemptRef.current, 30_000)
+        reconnectAttemptRef.current += 1
+        setConnectionStatus("reconnecting")
+        reconnectTimerRef.current = setTimeout(() => connect(rid), delay)
+      }
     }
 
     ws.onerror = () => {
       ws.close()
     }
-  }, [handleMessage, send])
+  }, [cleanup, handleMessage, send])
 
+  // roomId 변경 시: 히스토리 로드 + WS 재연결
   useEffect(() => {
-    connect()
-    return () => {
-      if (reconnectTimerRef.current) clearTimeout(reconnectTimerRef.current)
-      if (pingTimerRef.current) clearInterval(pingTimerRef.current)
-      wsRef.current?.close()
+    if (!roomId) {
+      cleanup()
+      setMessages([])
+      setConnectionStatus("disconnected")
+      setIsWaitingResponse(false)
+      setIsWaitingApproval(false)
+      return
     }
-  }, [connect])
+
+    let cancelled = false
+
+    ;(async () => {
+      // 히스토리 로드
+      try {
+        const res = await fetch(`/rooms/${roomId}/messages`)
+        if (cancelled) return
+        if (res.ok) {
+          const history: { type: string; content: string }[] = await res.json()
+          const restored: Message[] = history.map((m) => ({
+            id: crypto.randomUUID(),
+            type: m.type as "user" | "assistant",
+            content: m.content,
+            timestamp: Date.now(),
+          }))
+          setMessages(restored)
+        } else {
+          setMessages([])
+        }
+      } catch {
+        if (!cancelled) setMessages([])
+      }
+
+      if (!cancelled) {
+        reconnectAttemptRef.current = 0
+        connect(roomId)
+      }
+    })()
+
+    return () => {
+      cancelled = true
+      cleanup()
+    }
+  }, [roomId, connect, cleanup])
 
   const sendMessage = useCallback(
     (content: string) => {

@@ -1,3 +1,11 @@
+// --- Room ---
+export interface Room {
+  id: string
+  title: string
+  created_at: string
+  updated_at: string
+}
+
 // --- Tool Call ---
 export interface ToolCall {
   tool: string
@@ -44,15 +52,7 @@ export interface FileCardMessage {
   timestamp: number
 }
 
-export interface ThinkingMessage {
-  id: string
-  type: "thinking"
-  content: string
-  isComplete: boolean
-  timestamp: number
-}
-
-export type Message = UserMessage | AssistantMessage | ApprovalRequestMessage | ErrorMessage | FileCardMessage | ThinkingMessage
+export type Message = UserMessage | AssistantMessage | ApprovalRequestMessage | ErrorMessage | FileCardMessage
 
 // --- WebSocket protocol (wire format) ---
 export type WsSend =
@@ -66,15 +66,13 @@ export type WsReceive =
   | { type: "assistant_message"; content: string }
   | { type: "assistant_chunk"; content: string }
   | { type: "assistant_done" }
-  | { type: "thinking_start" }
-  | { type: "thinking_chunk"; content: string }
-  | { type: "thinking_done" }
   | { type: "approval_request"; tool_calls: ToolCall[] }
   | { type: "error"; content: string }
   | { type: "workspace_changed"; path: string; display: string }
   | { type: "workspace_error"; content: string }
   | { type: "file_opened"; path: string; filename: string }
   | { type: "file_created"; path: string; filename: string; size_bytes: number }
+  | { type: "room_title_updated"; room_id: string; title: string }
   | { type: "pong" }
 
 // --- Connection status ---
