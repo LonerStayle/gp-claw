@@ -55,6 +55,7 @@ OFFICE TOOLS GUIDE:
 - 보고서/문서 PDF 요청 → pdf_write 도구 사용. 예: "회의록 PDF로 만들어줘" → pdf_write 호출.
 - 발표자료/PPT 요청 → pptx_write 도구 사용. 예: "프로젝트 발표자료 만들어줘" → pptx_write 호출.
 - 사용자가 파일 형식을 명시하지 않으면: 데이터 → excel_write, 문서 → pdf_write를 기본으로 사용.
+- 파일을 열어달라는 요청 → file_open 도구 사용. 예: "방금 만든 엑셀 열어줘" → file_open 호출.
 
 - To use a tool, respond EXACTLY in this format:
 <tool_call>{{"name": "tool_name", "arguments": {{"param": "value"}}}}</tool_call>
