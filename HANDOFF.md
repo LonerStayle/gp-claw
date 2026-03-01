@@ -19,7 +19,8 @@
 | 4.1 토큰 스트리밍 | ✅ | LangGraph astream_events + `<tool_call>` 버퍼링 |
 | 4.2 시간 표시 | ✅ | 대화 메시지에 HH:MM 타임스탬프 |
 | 4.3 프롬프트 강화 | ✅ | AI가 도구를 즉시 사용하도록 시스템 프롬프트 개선 |
-| **5. 사무용 도구 + MD 렌더링** | **❌** | **엑셀/CSV/PDF/PPT 도구 + Markdown 렌더링 ← 다음 작업** |
+| 5. 사무용 도구 + MD 렌더링 | ✅ | excel/csv/pdf/pptx 도구 + Markdown 렌더링 (59 tests) |
+| **5.1 파일 열기 기능** | **❌** | **생성된 파일을 OS 기본 프로그램으로 열기 ← 다음 작업** |
 
 ## 아키텍처
 
@@ -27,6 +28,7 @@
 Frontend (Vite+React+TS:5173)  →  Vite proxy  →  Backend (FastAPI:8002)  →  RunPod vLLM
      ↕ WebSocket (streaming)                        ↕ LangGraph (astream_events)
   채팅 UI + 승인 카드 + 폴더 선택            safe/dangerous 도구 라우팅
+  Markdown 렌더링 (react-markdown)           사무용 도구 (excel/csv/pdf/pptx)
 ```
 
 ## 핵심 파일
@@ -44,6 +46,7 @@ Frontend (Vite+React+TS:5173)  →  Vite proxy  →  Backend (FastAPI:8002)  →
 | `tools/registry.py` | ToolRegistry. safe/dangerous 분류 |
 | `tools/safe_file.py` | file_read, file_search, file_list |
 | `tools/dangerous_file.py` | file_write, file_delete, file_move (승인 필요) |
+| `tools/office_file.py` | **excel_write, csv_write, pdf_write, pptx_write** (승인 필요) |
 
 ### Frontend (`frontend/src/`)
 
@@ -53,7 +56,7 @@ Frontend (Vite+React+TS:5173)  →  Vite proxy  →  Backend (FastAPI:8002)  →
 | `hooks/useWebSocket.ts` | WS 연결, 스트리밍 청크 수신, 승인 플로우, workspace 관리 |
 | `types.ts` | Message(+timestamp), ToolCall, WsSend/WsReceive 타입 |
 | `components/ChatContainer.tsx` | 메시지 리스트 + 자동 스크롤 |
-| `components/ChatMessage.tsx` | user/assistant/error 버블 + **시간 표시** |
+| `components/ChatMessage.tsx` | user/assistant/error 버블 + **Markdown 렌더링** + 시간 표시 |
 | `components/ApprovalCard.tsx` | 승인/거부 카드 |
 | `components/ChatInput.tsx` | 자동 리사이즈 + Enter 전송 |
 | `components/FolderPicker.tsx` | 폴더 선택 모달 (퀵 버튼 + 경로 입력) |
@@ -127,29 +130,33 @@ WORKSPACE_ROOT=~/.gp_claw/workspace
 - ✅ ChatGPT처럼 토큰 단위 실시간 스트리밍 응답
 - ✅ 프론트엔드에서 작업 폴더 변경 가능
 - ✅ 대화 메시지에 시간 표시
+- ✅ 사무용 파일 생성 (엑셀, CSV, PDF, PPT)
+- ✅ Markdown 렌더링 (react-markdown + remark-gfm)
 
-### 다음 요구사항 (Phase 5)
-- ❌ **사무용 파일 생성**: 엑셀(.xlsx), CSV, PDF, PPT 등 사무 문서를 AI가 직접 생성
-- ❌ **Markdown 렌더링**: AI 응답을 Markdown 형식으로 이쁘게 표시 (테이블, 코드 블록 등)
-- ❌ **OpenClaw 같은 경험**: 자연어로 "매출 엑셀 만들어줘"하면 바로 .xlsx 생성
+### 다음 요구사항 (Phase 5.1)
+- ❌ **파일 열기**: 생성된 파일을 OS 기본 프로그램으로 열기 (OpenClaw처럼)
+  - AI에게 "열어줘" → `file_open` 도구 (Dangerous, 승인 필요)
+  - 프론트엔드 "열기" 버튼 → WebSocket `open_file` (사용자 직접 클릭 = 승인 간주)
+  - macOS/Windows/Linux 모두 지원
 
 ### 장기적 방향 (추정)
 - Gmail 연동 (설계 문서에 명시됨)
 - 문서 요약/번역
 - 워크플로우 자동화 (반복 업무)
 
-## 다음 단계: Phase 5 — 사무용 도구 + Markdown 렌더링
+## 다음 단계: Phase 5.1 — 파일 열기 기능
 
-상세 계획: `docs/plans/2026-03-01-phase5-office-tools-plan.md`
+상세 계획: `docs/plans/2026-03-01-file-open-plan.md`
 
 | Task | 내용 |
 |------|------|
-| 1 | Python 의존성 설치 (openpyxl, reportlab, python-pptx) |
-| 2 | office_file.py — excel_write, csv_write, pdf_write, pptx_write 도구 |
-| 3 | 도구 테스트 작성 |
-| 4 | 시스템 프롬프트에 사무용 도구 가이드 추가 |
-| 5 | react-markdown + remark-gfm으로 Markdown 렌더링 |
-| 6 | 전체 빌드 검증 |
+| 1 | `file_open` 도구 추가 (office_file.py) — OS별 분기 (open/startfile/xdg-open) |
+| 2 | `file_open` 테스트 (monkeypatch로 OS 호출 모킹) |
+| 3 | WebSocket `open_file` 메시지 핸들러 (server.py) |
+| 4 | 프론트엔드 타입 + WebSocket 훅 업데이트 |
+| 5 | FileCard 컴포넌트 + ChatMessage 통합 (파일 생성 시 카드 표시 + 열기 버튼) |
+| 6 | 시스템 프롬프트에 file_open 가이드 추가 |
+| 7 | 전체 검증 |
 
 ## 참고 문서
 
@@ -159,4 +166,6 @@ WORKSPACE_ROOT=~/.gp_claw/workspace
 | React 프론트엔드 설계 | `docs/plans/2026-03-01-react-frontend-design.md` |
 | Phase 4 폴더 선택 설계 | `docs/plans/2026-03-01-folder-picker-design.md` |
 | 토큰 스트리밍 설계 | `docs/plans/2026-03-01-streaming-design.md` |
-| **Phase 5 계획** | `docs/plans/2026-03-01-phase5-office-tools-plan.md` |
+| Phase 5 계획 | `docs/plans/2026-03-01-phase5-office-tools-plan.md` |
+| **Phase 5.1 설계** | `docs/plans/2026-03-01-file-open-design.md` |
+| **Phase 5.1 계획** | `docs/plans/2026-03-01-file-open-plan.md` |
