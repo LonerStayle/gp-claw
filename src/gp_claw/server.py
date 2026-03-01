@@ -140,6 +140,31 @@ def create_app(
                             "display": display,
                         })
 
+                elif data.get("type") == "open_file":
+                    from gp_claw.security import validate_path, SecurityViolation
+                    from gp_claw.tools.office_file import _open_with_os
+
+                    raw_path = data.get("path", "")
+                    try:
+                        validated = validate_path(raw_path, session_workspace)
+                        if not validated.exists():
+                            await websocket.send_json({
+                                "type": "error",
+                                "content": f"파일을 찾을 수 없습니다: {raw_path}",
+                            })
+                        else:
+                            _open_with_os(str(validated))
+                            await websocket.send_json({
+                                "type": "file_opened",
+                                "path": str(validated),
+                                "filename": validated.name,
+                            })
+                    except SecurityViolation as e:
+                        await websocket.send_json({
+                            "type": "error",
+                            "content": str(e),
+                        })
+
                 elif data.get("type") == "user_message":
                     content = data.get("content", "")
 
@@ -173,6 +198,23 @@ def create_app(
                                     Command(resume=decision), config,
                                 )
                                 state = await session_agent.aget_state(config)
+
+                            # 도구 실행 결과에서 파일 생성 감지 → file_created 전송
+                            final_state = await session_agent.aget_state(config)
+                            for msg in final_state.values.get("messages", []):
+                                if hasattr(msg, "name") and hasattr(msg, "content"):
+                                    try:
+                                        import json as _json
+                                        result = _json.loads(msg.content) if isinstance(msg.content, str) else msg.content
+                                        if isinstance(result, dict) and result.get("action") == "created":
+                                            await websocket.send_json({
+                                                "type": "file_created",
+                                                "path": result.get("path", ""),
+                                                "filename": Path(result.get("path", "")).name,
+                                                "size_bytes": result.get("size_bytes", 0),
+                                            })
+                                    except (ValueError, TypeError):
+                                        pass
 
                             # Fallback: 스트리밍 이벤트 없으면 최종 메시지에서 가져옴
                             if not streamed:
