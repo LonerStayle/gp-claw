@@ -15,6 +15,7 @@ function App() {
     sendMessage,
     sendApproval,
     setWorkspace,
+    openFile,
   } = useWebSocket()
 
   return (
@@ -36,6 +37,7 @@ function App() {
         isWaitingResponse={isWaitingResponse}
         onApprove={() => sendApproval("approved")}
         onReject={() => sendApproval("rejected")}
+        onOpenFile={openFile}
       />
 
       {/* Input */}

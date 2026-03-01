@@ -1,6 +1,7 @@
 import { useEffect, useRef } from "react"
 import { ChatMessage } from "@/components/ChatMessage"
 import { ApprovalCard } from "@/components/ApprovalCard"
+import { FileCard } from "@/components/FileCard"
 import { Loader2 } from "lucide-react"
 import type { Message } from "@/types"
 
@@ -9,9 +10,10 @@ interface ChatContainerProps {
   isWaitingResponse: boolean
   onApprove: () => void
   onReject: () => void
+  onOpenFile: (path: string) => void
 }
 
-export function ChatContainer({ messages, isWaitingResponse, onApprove, onReject }: ChatContainerProps) {
+export function ChatContainer({ messages, isWaitingResponse, onApprove, onReject, onOpenFile }: ChatContainerProps) {
   const bottomRef = useRef<HTMLDivElement>(null)
 
   useEffect(() => {
@@ -39,6 +41,9 @@ export function ChatContainer({ messages, isWaitingResponse, onApprove, onReject
               onReject={onReject}
             />
           )
+        }
+        if (msg.type === "file_card") {
+          return <FileCard key={msg.id} message={msg} onOpen={onOpenFile} />
         }
         return <ChatMessage key={msg.id} message={msg} />
       })}
