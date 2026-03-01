@@ -1,16 +1,72 @@
 import logging
 from pathlib import Path
+from typing import Any
 
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 from langchain_core.messages import HumanMessage
 from langchain_openai import ChatOpenAI
 from langgraph.checkpoint.memory import MemorySaver
+from langgraph.types import Command
 
 from gp_claw.agent import create_agent
 from gp_claw.tools import create_tool_registry
 from gp_claw.tools.registry import ToolRegistry
 
 logger = logging.getLogger(__name__)
+
+TOOL_TAG = "<tool_call>"
+
+
+async def _stream_agent_response(
+    agent: Any, websocket: WebSocket, input_data: Any, config: dict
+) -> None:
+    """에이전트 응답을 토큰 단위로 스트리밍.
+
+    <tool_call> 태그가 감지되면 스트리밍을 중단하고 버퍼링합니다.
+    """
+    pending = ""
+    tool_detected = False
+
+    async for event in agent.astream_events(input_data, config, version="v2"):
+        if event["event"] != "on_chat_model_stream":
+            continue
+        chunk = event["data"]["chunk"]
+        if not hasattr(chunk, "content") or not chunk.content:
+            continue
+
+        if tool_detected:
+            continue
+
+        pending += chunk.content
+
+        # 완전한 <tool_call> 태그 발견
+        if TOOL_TAG in pending:
+            idx = pending.index(TOOL_TAG)
+            if idx > 0:
+                await websocket.send_json(
+                    {"type": "assistant_chunk", "content": pending[:idx]}
+                )
+            tool_detected = True
+            continue
+
+        # <tool_call> 의 부분 매치 확인 — 매치 가능한 부분은 보류
+        flush_up_to = len(pending)
+        for i in range(len(pending)):
+            if TOOL_TAG.startswith(pending[i:]):
+                flush_up_to = i
+                break
+
+        if flush_up_to > 0:
+            await websocket.send_json(
+                {"type": "assistant_chunk", "content": pending[:flush_up_to]}
+            )
+            pending = pending[flush_up_to:]
+
+    # 스트리밍 종료 — 남은 pending 전송
+    if not tool_detected and pending:
+        await websocket.send_json(
+            {"type": "assistant_chunk", "content": pending}
+        )
 
 
 def create_app(
@@ -82,12 +138,14 @@ def create_app(
 
                     if session_agent:
                         try:
-                            result = await session_agent.ainvoke(
+                            # 스트리밍 응답
+                            await _stream_agent_response(
+                                session_agent, websocket,
                                 {"messages": [HumanMessage(content=content)]},
                                 config,
                             )
 
-                            # Phase 2C: interrupt 처리 (approval 루프)
+                            # interrupt 처리 (approval 루프)
                             state = await session_agent.aget_state(config)
                             while state.next:
                                 interrupt_data = state.tasks[0].interrupts[0].value
@@ -102,18 +160,14 @@ def create_app(
                                 else:
                                     decision = "rejected"
 
-                                from langgraph.types import Command
-                                result = await session_agent.ainvoke(
+                                # resume도 스트리밍
+                                await _stream_agent_response(
+                                    session_agent, websocket,
                                     Command(resume=decision), config,
                                 )
                                 state = await session_agent.aget_state(config)
 
-                            last_message = result["messages"][-1]
-                            if hasattr(last_message, "content") and last_message.content:
-                                await websocket.send_json({
-                                    "type": "assistant_message",
-                                    "content": last_message.content,
-                                })
+                            await websocket.send_json({"type": "assistant_done"})
                         except Exception as e:
                             logger.error(f"Agent error: {e}", exc_info=True)
                             await websocket.send_json({
@@ -122,9 +176,10 @@ def create_app(
                             })
                     else:
                         await websocket.send_json({
-                            "type": "assistant_message",
+                            "type": "assistant_chunk",
                             "content": f"[에코] {content}",
                         })
+                        await websocket.send_json({"type": "assistant_done"})
 
                 else:
                     await websocket.send_json({

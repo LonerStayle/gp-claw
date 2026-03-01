@@ -184,4 +184,5 @@ def create_llm(settings: Settings) -> ToolParsingChatModel:
         base_url=settings.vllm_base_url,
         temperature=settings.llm_temperature,
         max_tokens=settings.llm_max_tokens,
+        streaming=True,
     )

@@ -42,6 +42,27 @@ export function useWebSocket(): UseWebSocketReturn {
     const data: WsReceive = JSON.parse(event.data)
 
     switch (data.type) {
+      case "assistant_chunk":
+        setMessages((prev) => {
+          const last = prev[prev.length - 1]
+          if (last?.type === "assistant") {
+            return [
+              ...prev.slice(0, -1),
+              { ...last, content: last.content + data.content },
+            ]
+          }
+          return [
+            ...prev,
+            { id: crypto.randomUUID(), type: "assistant", content: data.content },
+          ]
+        })
+        break
+
+      case "assistant_done":
+        setIsWaitingResponse(false)
+        setIsWaitingApproval(false)
+        break
+
       case "assistant_message":
         setMessages((prev) => [
           ...prev,

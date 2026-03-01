@@ -42,6 +42,8 @@ export type WsSend =
 
 export type WsReceive =
   | { type: "assistant_message"; content: string }
+  | { type: "assistant_chunk"; content: string }
+  | { type: "assistant_done" }
   | { type: "approval_request"; tool_calls: ToolCall[] }
   | { type: "error"; content: string }
   | { type: "workspace_changed"; path: string; display: string }
