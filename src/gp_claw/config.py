@@ -16,7 +16,7 @@ class Settings(BaseSettings):
 
     # LLM
     llm_temperature: float = 0.3
-    llm_max_tokens: int = 4096
+    llm_max_tokens: int = 2048
 
     @property
     def vllm_base_url(self) -> str:
