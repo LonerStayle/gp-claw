@@ -35,13 +35,23 @@ export interface ErrorMessage {
   timestamp: number
 }
 
-export type Message = UserMessage | AssistantMessage | ApprovalRequestMessage | ErrorMessage
+export interface FileCardMessage {
+  id: string
+  type: "file_card"
+  filename: string
+  path: string
+  sizeBytes: number
+  timestamp: number
+}
+
+export type Message = UserMessage | AssistantMessage | ApprovalRequestMessage | ErrorMessage | FileCardMessage
 
 // --- WebSocket protocol (wire format) ---
 export type WsSend =
   | { type: "user_message"; content: string }
   | { type: "approval_response"; decision: "approved" | "rejected" }
   | { type: "set_workspace"; path: string }
+  | { type: "open_file"; path: string }
   | { type: "ping" }
 
 export type WsReceive =
@@ -52,6 +62,8 @@ export type WsReceive =
   | { type: "error"; content: string }
   | { type: "workspace_changed"; path: string; display: string }
   | { type: "workspace_error"; content: string }
+  | { type: "file_opened"; path: string; filename: string }
+  | { type: "file_created"; path: string; filename: string; size_bytes: number }
   | { type: "pong" }
 
 // --- Connection status ---

@@ -18,6 +18,7 @@ interface UseWebSocketReturn {
   sendMessage: (content: string) => void
   sendApproval: (decision: "approved" | "rejected") => void
   setWorkspace: (path: string) => void
+  openFile: (path: string) => void
 }
 
 export function useWebSocket(): UseWebSocketReturn {
@@ -107,6 +108,23 @@ export function useWebSocket(): UseWebSocketReturn {
         ])
         break
 
+      case "file_opened":
+        break
+
+      case "file_created":
+        setMessages((prev) => [
+          ...prev,
+          {
+            id: crypto.randomUUID(),
+            type: "file_card",
+            filename: data.filename,
+            path: data.path,
+            sizeBytes: data.size_bytes,
+            timestamp: Date.now(),
+          },
+        ])
+        break
+
       case "pong":
         break
     }
@@ -191,6 +209,13 @@ export function useWebSocket(): UseWebSocketReturn {
     [send]
   )
 
+  const openFile = useCallback(
+    (path: string) => {
+      send({ type: "open_file", path })
+    },
+    [send]
+  )
+
   return {
     messages,
     connectionStatus,
@@ -200,5 +225,6 @@ export function useWebSocket(): UseWebSocketReturn {
     sendMessage,
     sendApproval,
     setWorkspace,
+    openFile,
   }
 }
