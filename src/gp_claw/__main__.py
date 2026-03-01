@@ -18,8 +18,12 @@ def main():
 
     workspace = settings.workspace_root.expanduser()
     workspace.mkdir(parents=True, exist_ok=True)
+
+    db_path = settings.db_path.expanduser()
+    db_path.parent.mkdir(parents=True, exist_ok=True)
+
     registry = create_tool_registry(str(workspace))
-    app = create_app(llm=llm, registry=registry, workspace_root=str(workspace))
+    app = create_app(llm=llm, registry=registry, workspace_root=str(workspace), db_path=str(db_path))
     uvicorn.run(app, host=settings.host, port=settings.port)
 
 

@@ -1,6 +1,6 @@
 # GP Claw Handoff Document
 
-> 마지막 업데이트: 2026-03-01 (저녁 세션)
+> 마지막 업데이트: 2026-03-01 (밤 세션)
 
 ## Goal
 
@@ -12,72 +12,117 @@
 | Phase | 상태 | 설명 |
 |-------|------|------|
 | 1. Foundation | ✅ | FastAPI + LangGraph + WebSocket |
-| 2. Tool System + HITL | ✅ | 도구 레지스트리 + 승인 워크플로우 (45 tests) |
+| 2. Tool System + HITL | ✅ | 도구 레지스트리 + 승인 워크플로우 |
 | 3. React Frontend | ✅ | 채팅 UI + 승인 카드 + WebSocket 연결 |
 | 3.1 vLLM Tool Calling | ✅ | ToolParsingChatModel (`<tool_call>` 태그 파싱) |
 | 4. 폴더 선택 기능 | ✅ | 프론트엔드에서 AI 작업 폴더 동적 변경 |
 | 4.1 토큰 스트리밍 | ✅ | LangGraph astream_events + `<tool_call>` 버퍼링 |
 | 4.2 시간 표시 | ✅ | 대화 메시지에 HH:MM 타임스탬프 |
 | 4.3 프롬프트 강화 | ✅ | 한국어 few-shot 시스템 프롬프트 (temperature 0.3) |
-| 5. 사무용 도구 + MD 렌더링 | ✅ | excel/csv/pdf/pptx 도구 + Markdown 렌더링 (62 tests) |
+| 5. 사무용 도구 + MD 렌더링 | ✅ | excel/csv/pdf/pptx 도구 + Markdown 렌더링 |
 | 5.1 파일 열기 기능 | ✅ | file_open 도구 + FileCard UI + 열기 버튼 |
-| 5.2 모델 교체 | ✅ | skt/A.X-4.0-Light → Qwen2.5-14B → **Mi:dm 2.0 Base** (KT, 11.5B) |
+| 5.2 모델 교체 | ✅ | Mi:dm 2.0 Base (KT, 11.5B) |
+| **6. Multi-Room Chat** | **✅** | **사이드바 대화방 CRUD + 방 전환 + 히스토리 복원** |
+| **6.1 SQLite 영속성** | **🔜 다음 작업** | **인메모리 → SQLite 전환 (계획 완료, 구현 대기)** |
 
 ## 이번 세션에서 한 작업
 
-### 커밋되지 않은 변경사항 (중요!)
+### Multi-Room Chat 구현 완료 (커밋 안 됨)
 
-아래 변경사항이 모두 **스테이징 안 된 상태**로 남아있습니다.
+ChatGPT/Claude 스타일의 왼쪽 사이드바 대화방 목록 기능을 구현함.
 
-#### 1. Thinking 태그 스트리밍 기능 제거 (이전 세션)
-- `server.py`: `<think>`/`</think>` 파싱 로직 전체 삭제, `_find_partial_match` 헬퍼 삭제
-- `types.ts`: `ThinkingMessage` 타입, thinking 관련 `WsReceive` 이벤트 삭제
-- `useWebSocket.ts`: `thinking_start/chunk/done` 핸들러 삭제
-- `ChatContainer.tsx`: `ThinkingBlock` import 및 렌더링 제거
-- `ThinkingBlock.tsx`: 파일 자체 삭제
+#### 신규 파일 (4개)
+| 파일 | 목적 |
+|------|------|
+| `src/gp_claw/rooms.py` | Room 메타데이터 매니저 (인메모리 dict) |
+| `tests/test_rooms.py` | Room CRUD + 메시지 히스토리 API 테스트 (12개) |
+| `frontend/src/hooks/useRooms.ts` | Room CRUD + 활성 방 관리 훅 |
+| `frontend/src/components/Sidebar.tsx` | 사이드바 UI (방 목록, 인라인 이름변경, 삭제 확인 다이얼로그) |
 
-#### 2. Mi:dm 2.0 모델 교체 (이전 세션)
-- `HANDOFF.md`, `README.md`: Qwen3-8B → Mi:dm 2.0 Base 반영
-- `llm.py`: 한국어 강제 시스템 프롬프트 강화 (`<think>`도 한국어, 다른 언어 금지)
+#### 수정 파일 (8개)
+| 파일 | 변경 내용 |
+|------|----------|
+| `src/gp_claw/server.py` | REST 엔드포인트 6개 추가 (`/rooms` CRUD + `/rooms/{id}/messages`) + WS에서 room 자동생성/자동제목 |
+| `frontend/src/hooks/useWebSocket.ts` | `roomId` 파라미터화, 히스토리 로드(`GET /rooms/{id}/messages`), `sessionStorage` 제거, `room_title_updated` 처리 |
+| `frontend/src/types.ts` | `Room` 인터페이스 추가, `room_title_updated` WS 이벤트 타입 |
+| `frontend/src/App.tsx` | 2열 레이아웃(Sidebar+Main), `useRooms` 통합, 사이드바 토글 버튼, `Cmd+Shift+O` 새 대화 단축키 |
+| `frontend/vite.config.ts` | `/rooms` 프록시 추가 |
+| `tests/test_ws_agent.py` | `room_title_updated` 이벤트 핸들링 추가 |
+| `tests/test_ws_approval.py` | `room_title_updated` 이벤트 핸들링 추가 |
+| `tests/test_agent_tools.py` | `room_title_updated` 이벤트 핸들링 추가 |
 
-#### 3. 스트리밍 에러 복구 로직 (이전 세션)
-- `server.py`: `_recover_thread()` 함수 추가 — 에러 시 오염된 체크포인트 정리 후 정상 메시지 복원
+#### 검증 상태
+- **73개 테스트 전부 통과** (`test_config.py` 1개 기존 실패 제외)
+- 프론트엔드 TypeScript 타입 체크 통과 + 프로덕션 빌드 성공
 
-#### 4. `</tool_call>` 닫는 태그 누락 수정 (이번 세션) ★
-- **문제**: Mi:dm 2.0이 `<tool_call>{...}` 만 출력하고 `</tool_call>` 닫는 태그를 안 붙임
-- **`llm.py` `_parse_tool_calls()`**: 닫는 태그 없는 경우에도 fallback 정규식으로 파싱
-- **`server.py` fallback**: `<tool_call>` 태그가 프론트엔드에 raw 노출되지 않도록 필터링
+### 현재 한계: 인메모리 저장
+- Room 메타데이터(`RoomManager._rooms` dict)와 대화 히스토리(`MemorySaver`)가 모두 **인메모리**
+- **서버 재시작 시 전부 사라짐** → SQLite 전환 필요
 
-#### 5. 승인 루프 ping 간섭 수정 (이번 세션) ★
-- **문제**: 프론트엔드 30초 ping이 승인 대기 중 `receive_json()`에 먼저 도착 → 자동 거부 처리
-- **`server.py` 승인 루프**: ping을 내부에서 처리하는 while 루프 추가
+---
 
-### 검증 상태
-- 61개 테스트 통과 (test_config.py 1개 기존 실패 제외)
-- `_parse_tool_calls` 4가지 케이스 검증 완료 (닫는 태그 있음/없음, 텍스트 포함, 줄바꿈 포함)
-- **실제 Mi:dm 2.0 연동 테스트는 아직 미완료** — 사용자가 서버 재시작 후 테스트 필요
+## Next Steps: SQLite 영속성 전환
+
+### 구현 계획 (검증 완료)
+
+상세 계획: `/Users/goldenplanet/.claude/plans/composed-shimmying-mango.md`
+
+#### 핵심 설계
+| 항목 | 결정 | 이유 |
+|------|------|------|
+| DB 파일 위치 | `~/.gp_claw/gp_claw.db` | 설정 가능, 프로젝트 간 충돌 없음 |
+| Room 테이블 | `sqlite3` 직접 사용 | 단순 CRUD, 추가 의존성 불필요 |
+| LangGraph 체크포인터 | `SqliteSaver` (동일 DB 파일) | `langgraph-checkpoint-sqlite>=2.0` 이미 의존성에 있음 |
+| RoomManager API | 기존 인터페이스 유지 | server.py 호출부 변경 최소화 |
+| 테스트 | `:memory:` SQLite 사용 | 테스트 격리 + 기존 패턴 호환 |
+
+#### 5 단계 구현 순서
+
+1. **`config.py`** — `db_path: Path = Path("~/.gp_claw/gp_claw.db")` 추가
+2. **`rooms.py`** — `dict` → `sqlite3` 교체 (API 시그니처 동일 유지)
+3. **`server.py`** — `MemorySaver()` → `SqliteSaver(conn)` + `RoomManager(db_path)`
+   - **주의**: `SqliteSaver.from_conn_string()`은 context manager(Iterator)이므로, `sqlite3.connect()` + `SqliteSaver(conn)` + `setup()` 패턴 사용
+4. **`__main__.py`** — DB 디렉토리 자동 생성 + `db_path` 전달
+5. **테스트** — `create_app()` 기본값 `":memory:"` → 기존 73개 테스트 변경 불필요
+
+#### 변경 파일
+| 파일 | 변경 유형 |
+|------|----------|
+| `src/gp_claw/rooms.py` | 수정 (dict → SQLite) |
+| `src/gp_claw/config.py` | 수정 (`db_path` 추가) |
+| `src/gp_claw/server.py` | 수정 (`MemorySaver` → `SqliteSaver`) |
+| `src/gp_claw/__main__.py` | 수정 (DB 디렉토리 생성 + `db_path` 전달) |
+| `tests/test_rooms.py` | 확인 (변경 불필요할 가능성 높음) |
+
+프론트엔드 변경 **없음**.
+
+---
 
 ## What Worked
 
-- Mi:dm 2.0 Base가 RunPod에서 정상 기동됨 (GPU 호환성 문제 해결 후)
-- 한국어로 응답하고 `<tool_call>` 형식으로 도구 호출 시도함
-- `.env`의 `VLLM_MODEL_NAME`을 소문자(`k-intelligence/midm-2.0-base-instruct`)로 변경하니 모델 인식 성공
+- LangGraph `MemorySaver`의 `thread_id` = Room ID 직접 매핑 → 변환 레이어 불필요
+- `useWebSocket(roomId)` 파라미터화로 방 전환 시 WS 재연결 + 히스토리 로드 깔끔하게 동작
+- `room_title_updated` WS 이벤트로 자동 제목 생성이 사이드바에 실시간 반영
+- Radix Dialog로 삭제 확인 대화상자 기존 컴포넌트 재활용
 
 ## What Didn't Work / 주의사항
 
-1. **RunPod GPU 호환성**: vLLM v0.15.1 Docker 이미지는 Ampere 이상 GPU 필요. 구세대 GPU 배정 시 `Error 804: forward compatibility` 발생. 엔드포인트 GPU 타입을 A40/A100/L40S로 지정해야 함
-2. **VLLM_MODEL_NAME 대소문자**: RunPod이 모델명을 소문자로 등록하므로 `.env`도 소문자 필수 (`K-intelligence/...` → `k-intelligence/...`)
-3. **`NUM_GPU_BLOCKS_OVERRIDE=0`**: 기본값이 0이면 vLLM 에러. 환경변수 자체를 삭제해야 함
-4. **Mi:dm 2.0 닫는 태그 누락**: 네이티브 chat template에는 `</tool_call>` 형식이 정의돼 있지만, 커스텀 시스템 프롬프트 사용 시 닫는 태그를 빠뜨리는 경향. fallback 파서로 대응 중
-5. **Mi:dm 2.0 네이티브 tool calling**: chat template에 tool calling 지원이 내장되어 있음 (`tools` 파라미터 전달 시 활성화). 현재는 `ToolParsingChatModel`이 `tools`를 API에 안 보내고 시스템 프롬프트로 주입하는 방식
+1. **`room_title_updated` 이벤트 추가 시 기존 테스트 5개 깨짐**: `assistant_done` 직전에 새 이벤트가 삽입되어 기존 WS 테스트들이 `room_title_updated`를 `assistant_done`으로 착각. 각 테스트에 수신 순서 추가하여 해결
+2. **`SqliteSaver.from_conn_string()`은 context manager**: `yield`로 `SqliteSaver`를 반환하는 Iterator이므로 `create_app()` 같은 팩토리 함수에서 직접 사용 불가. `sqlite3.connect()` → `SqliteSaver(conn)` → `setup()` 패턴 사용해야 함
+3. **RunPod GPU 호환성**: Ampere+ GPU 필요 (A40, A100, L40S). 구세대 GPU 시 CUDA Error 804
+4. **VLLM_MODEL_NAME 대소문자**: RunPod이 모델명을 소문자로 등록하므로 `.env`도 소문자 필수
+5. **test_config.py 1개 실패**: port 기본값 8002 반영 안 된 기존 버그 (기능에 영향 없음)
+
+---
 
 ## 아키텍처
 
 ```
 Frontend (Vite+React+TS:5173)  →  Vite proxy  →  Backend (FastAPI:8002)  →  RunPod vLLM
      ↕ WebSocket (streaming)                        ↕ LangGraph (astream_events)
-  채팅 UI + 승인 카드 + 폴더 선택            safe/dangerous 도구 라우팅
+  사이드바 + 채팅 UI + 승인 카드             safe/dangerous 도구 라우팅
   Markdown 렌더링 + 파일 카드              사무용 도구 (excel/csv/pdf/pptx/file_open)
+  Room CRUD (useRooms hook)                Room REST API + 인메모리 RoomManager
 ```
 
 ## 핵심 파일
@@ -88,30 +133,25 @@ Frontend (Vite+React+TS:5173)  →  Vite proxy  →  Backend (FastAPI:8002)  →
 |------|------|
 | `__main__.py` | 엔트리포인트. Settings → LLM → Registry → App |
 | `config.py` | Pydantic Settings. .env 연동 (temperature, max_tokens 등) |
-| `server.py` | FastAPI + WebSocket. **스트리밍 응답** + 승인 루프(ping 처리) + 세션별 workspace + open_file + file_created 알림 + **에러 복구(_recover_thread)** |
+| `server.py` | FastAPI + WebSocket + Room REST API. 스트리밍 + 승인 루프 + room 자동생성/자동제목 + 에러 복구 |
+| `rooms.py` | **RoomManager** — Room CRUD (현재 인메모리 dict, SQLite 전환 예정) |
 | `agent.py` | LangGraph 그래프. safe/dangerous 라우팅 + interrupt |
-| `llm.py` | **ToolParsingChatModel** — `_astream` 오버라이드로 스트리밍 + tool_call 파싱(닫는 태그 없어도 동작). 한국어 few-shot 시스템 프롬프트 |
+| `llm.py` | ToolParsingChatModel — 스트리밍 + tool_call 파싱. 한국어 few-shot 시스템 프롬프트 |
 | `security.py` | 경로 검증. 워크스페이스 내부만 허용 |
 | `tools/registry.py` | ToolRegistry. safe/dangerous 분류 |
-| `tools/safe_file.py` | file_read, file_search, file_list |
-| `tools/dangerous_file.py` | file_write, file_delete, file_move (승인 필요) |
-| `tools/office_file.py` | excel_write, csv_write, pdf_write, pptx_write, **file_open** (승인 필요) |
 
 ### Frontend (`frontend/src/`)
 
 | 파일 | 역할 |
 |------|------|
-| `App.tsx` | 메인 레이아웃. 헤더 + 폴더 선택 + 채팅 + 입력 |
-| `hooks/useWebSocket.ts` | WS 연결, 스트리밍 청크 수신, 승인 플로우, workspace 관리, **openFile + file_created 핸들러** |
-| `types.ts` | Message(+timestamp+FileCardMessage), ToolCall, WsSend/WsReceive 타입 |
-| `components/ChatContainer.tsx` | 메시지 리스트 + 자동 스크롤 + **FileCard 렌더링** |
-| `components/ChatMessage.tsx` | user/assistant/error 버블 + **Markdown 렌더링** + 시간 표시 |
-| `components/FileCard.tsx` | **파일 카드 (아이콘 + 파일명 + 크기 + 열기 버튼)** |
+| `App.tsx` | 메인 레이아웃 (Sidebar + Header + Chat + Input), 사이드바 토글, Cmd+Shift+O 단축키 |
+| `hooks/useRooms.ts` | Room CRUD 훅 (fetch /rooms API, 활성 방 관리) |
+| `hooks/useWebSocket.ts` | WS 연결 (`roomId` 파라미터), 방 전환 시 히스토리 로드, 스트리밍 수신 |
+| `types.ts` | Room, Message, ToolCall, WsSend/WsReceive 타입 |
+| `components/Sidebar.tsx` | 사이드바 (방 목록 + 새 대화 + 인라인 이름변경 + 삭제 확인) |
+| `components/ChatContainer.tsx` | 메시지 리스트 + 자동 스크롤 |
+| `components/ChatMessage.tsx` | user/assistant/error 버블 + Markdown 렌더링 |
 | `components/ApprovalCard.tsx` | 승인/거부 카드 |
-| `components/ChatInput.tsx` | 자동 리사이즈 + Enter 전송 |
-| `components/FolderPicker.tsx` | 폴더 선택 모달 (퀵 버튼 + 경로 입력) |
-| `components/ConnectionStatus.tsx` | 연결 상태 배지 |
-| `components/ui/` | shadcn Button, Card, Badge, Dialog |
 
 ## WebSocket 프로토콜
 
@@ -122,60 +162,26 @@ Client → Server:  {"type": "user_message", "content": "..."}
                   {"type": "open_file", "path": "report.xlsx"}
                   {"type": "ping"}
 
-Server → Client:  {"type": "assistant_chunk", "content": "토큰"}     ← 스트리밍
-                  {"type": "assistant_done"}                          ← 스트리밍 완료
+Server → Client:  {"type": "assistant_chunk", "content": "토큰"}
+                  {"type": "room_title_updated", "room_id": "...", "title": "..."}  ← 자동 제목
+                  {"type": "assistant_done"}
                   {"type": "approval_request", "tool_calls": [{tool, args, preview}]}
                   {"type": "file_created", "path": "...", "filename": "...", "size_bytes": 0}
-                  {"type": "file_opened", "path": "...", "filename": "..."}
                   {"type": "workspace_changed", "path": "...", "display": "~/Desktop"}
-                  {"type": "workspace_error", "content": "..."}
                   {"type": "error", "content": "..."}
                   {"type": "pong"}
 ```
 
-## 스트리밍 구조 (중요)
+## Room REST API
 
 ```
-ToolParsingChatModel._astream()
-  → 시스템 프롬프트(도구 정의) 주입
-  → super()._astream()으로 토큰 스트리밍
-  → 스트리밍 완료 후 <tool_call> 태그 파싱 → tool_call_chunks로 LangGraph 전달
-  → ★ 닫는 태그(</tool_call>) 없어도 파싱 가능 (Mi:dm 2.0 대응)
-
-server.py._stream_agent_response()
-  → agent.astream_events()로 on_chat_model_stream 이벤트 수신
-  → 일반 텍스트 → assistant_chunk로 WebSocket 전송
-  → <tool_call> 감지 → 버퍼링 (프론트엔드에 안 보냄)
-  → 스트리밍 미지원 agent → fallback (tool_call 태그 필터링 후 전송)
-  → 도구 실행 후 file_created 알림 전송 (최근 턴 메시지만 스캔)
-  → ★ 승인 대기 중 ping 메시지 내부 처리
+GET    /rooms                    → 전체 방 목록 (최신순)
+POST   /rooms                    → 새 방 생성 (body: {"title": "..."})
+GET    /rooms/{room_id}          → 방 상세
+PATCH  /rooms/{room_id}          → 제목 변경 (body: {"title": "..."})
+DELETE /rooms/{room_id}          → 방 삭제 + 체크포인터 정리
+GET    /rooms/{room_id}/messages → 대화 히스토리 (체크포인터에서 추출)
 ```
-
-**주의:** `astream_events`는 `_astream`을 호출합니다 (`_agenerate` 아님). 새 모델 래퍼 작성 시 `_astream`도 반드시 오버라이드해야 합니다.
-
-## Next Steps (우선순위 순)
-
-1. **실제 연동 테스트** — 서버 재시작 후 Mi:dm 2.0으로 도구 호출(file_list, excel_write 등) 정상 동작 확인
-2. **커밋** — 이번 세션 변경사항 커밋 (thinking 제거 + Mi:dm 교체 + tool_call 파서 수정 + 승인 루프 수정)
-3. **Mi:dm 2.0 네이티브 tool calling 전환 검토** — chat template에 내장된 tool calling 활용 시 `ToolParsingChatModel` 제거 가능. vLLM `--tool-call-parser` 옵션 사용
-4. **test_config.py 수정** — port 기본값 8002 반영 (사소한 테스트 버그)
-
-## 알려진 이슈
-
-1. **test_config.py 1개 실패** — port 기본값 테스트 (기존 버그, 기능에 영향 없음)
-2. **RunPod 콜드 스타트** — 첫 요청 시 빈 스트림 가능. 자동 1회 재시도 로직 추가됨
-3. **VLLM_MODEL_NAME 대소문자** — RunPod이 모델명을 소문자로 등록하므로 `.env`도 소문자 필수
-4. **RunPod GPU 호환성** — Ampere+ GPU 필요 (A40, A100, L40S). 구세대 GPU 시 CUDA Error 804
-5. **NUM_GPU_BLOCKS_OVERRIDE** — 환경변수 자체를 삭제해야 함 (0으로 설정하면 에러)
-
-## Mi:dm 2.0 Chat Template (참고)
-
-Mi:dm 2.0은 네이티브 tool calling을 지원합니다. `tools` 파라미터가 전달되면 chat template이 자동으로:
-- 도구 사용 규칙 (필수 인자 포함, tool_name 변경 금지 등) 주입
-- `<tool_call></tool_call>` 형식 안내
-- `tool_list`에 도구 정의 JSON 추가
-
-현재는 `ToolParsingChatModel`이 이를 우회하고 시스템 프롬프트로 직접 주입하는 방식입니다.
 
 ## 실행 방법
 
@@ -185,51 +191,25 @@ source .venv/bin/activate && python -m gp_claw  # → :8002
 
 # Frontend (터미널 2)
 cd frontend && npm run dev  # → :5173 (proxy → :8002)
+
+# 테스트
+source .venv/bin/activate && python -m pytest tests/ -q --ignore=tests/test_config.py
 ```
 
 ## 환경 변수 (.env)
 
 ```
-# RunPod vLLM
 RUNPOD_API_KEY=rpa_...
 RUNPOD_ENDPOINT_ID=엔드포인트_ID
-VLLM_MODEL_NAME=k-intelligence/midm-2.0-base-instruct  # ★ 반드시 소문자
-
-# Server
+VLLM_MODEL_NAME=k-intelligence/midm-2.0-base-instruct  # 반드시 소문자
 PORT=8002
 WORKSPACE_ROOT=~/.gp_claw/workspace
-
-# LLM Parameters
 LLM_MAX_TOKENS=8192
 LLM_TEMPERATURE=0.3
 ```
 
-## 사용자가 원하는 것 (대화에서 파악한 요구사항)
+## 알려진 이슈
 
-### 완료된 요구사항
-- ✅ AI가 질문 없이 도구를 즉시 사용할 것 (한국어 few-shot 프롬프트)
-- ✅ ChatGPT처럼 토큰 단위 실시간 스트리밍 응답
-- ✅ 프론트엔드에서 작업 폴더 변경 가능
-- ✅ 대화 메시지에 시간 표시
-- ✅ 사무용 파일 생성 (엑셀, CSV, PDF, PPT)
-- ✅ Markdown 렌더링 (react-markdown + remark-gfm)
-- ✅ 파일 열기 (file_open 도구 + FileCard UI + 열기 버튼)
-- ✅ 모델 교체 (skt/A.X-4.0-Light → Qwen2.5-14B → Mi:dm 2.0 Base)
-
-### 장기적 방향 (추정)
-- Gmail 연동 (설계 문서에 명시됨)
-- 문서 요약/번역
-- 워크플로우 자동화 (반복 업무)
-- vLLM 네이티브 tool calling으로 전환 (ToolParsingChatModel 제거 가능)
-
-## 참고 문서
-
-| 문서 | 경로 |
-|------|------|
-| 전체 설계 | `docs/plans/2026-02-28-gp-claw-design.md` |
-| React 프론트엔드 설계 | `docs/plans/2026-03-01-react-frontend-design.md` |
-| Phase 4 폴더 선택 설계 | `docs/plans/2026-03-01-folder-picker-design.md` |
-| 토큰 스트리밍 설계 | `docs/plans/2026-03-01-streaming-design.md` |
-| Phase 5 계획 | `docs/plans/2026-03-01-phase5-office-tools-plan.md` |
-| Phase 5.1 설계 | `docs/plans/2026-03-01-file-open-design.md` |
-| Phase 5.1 계획 | `docs/plans/2026-03-01-file-open-plan.md` |
+1. **test_config.py 1개 실패** — port 기본값 8002 반영 안 된 기존 버그
+2. **RunPod 콜드 스타트** — 첫 요청 시 빈 스트림 가능. 자동 1회 재시도 로직 있음
+3. **인메모리 저장** — 서버 재시작 시 방 목록 + 대화 내역 초기화됨 ← **SQLite 전환으로 해결 예정**

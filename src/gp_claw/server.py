@@ -1,14 +1,16 @@
 import logging
 import re as _re
+from contextlib import asynccontextmanager
 from dataclasses import asdict
 from pathlib import Path
 from typing import Any
 
+import aiosqlite
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 from fastapi.responses import JSONResponse
 from langchain_core.messages import AIMessage, HumanMessage
 from langchain_openai import ChatOpenAI
-from langgraph.checkpoint.memory import MemorySaver
+from langgraph.checkpoint.sqlite.aio import AsyncSqliteSaver
 from langgraph.types import Command
 from pydantic import BaseModel
 
@@ -85,6 +87,7 @@ def create_app(
     llm: ChatOpenAI | None = None,
     registry: ToolRegistry | None = None,
     workspace_root: str | None = None,
+    db_path: str = ":memory:",
 ) -> FastAPI:
     """FastAPI 애플리케이션 생성.
 
@@ -92,12 +95,25 @@ def create_app(
         llm: LLM 인스턴스. None이면 에코 모드.
         registry: ToolRegistry. None이면 도구 없는 대화 모드.
         workspace_root: 기본 워크스페이스 경로.
+        db_path: SQLite DB 경로. 기본값 ":memory:".
     """
-    app = FastAPI(title="GP Claw", version="0.3.0")
-    checkpointer = MemorySaver()
-    default_agent = create_agent(llm, registry=registry, checkpointer=checkpointer) if llm else None
+    # Mutable holders — populated in lifespan (AsyncSqliteSaver needs event loop)
+    _checkpointer = [None]
+    _agent = [None]
+
+    @asynccontextmanager
+    async def lifespan(_app: FastAPI):
+        conn = await aiosqlite.connect(db_path)
+        await conn.execute("PRAGMA journal_mode=WAL")
+        _checkpointer[0] = AsyncSqliteSaver(conn)
+        await _checkpointer[0].setup()
+        _agent[0] = create_agent(llm, registry=registry, checkpointer=_checkpointer[0]) if llm else None
+        yield
+        await conn.close()
+
+    app = FastAPI(title="GP Claw", version="0.3.0", lifespan=lifespan)
     default_workspace = workspace_root or str(Path("~/.gp_claw/workspace").expanduser().resolve())
-    room_manager = RoomManager()
+    room_manager = RoomManager(db_path)
 
     # --- Pydantic models for request bodies ---
     class RoomTitleBody(BaseModel):
@@ -139,7 +155,7 @@ def create_app(
             return JSONResponse(status_code=404, content={"detail": "Room not found"})
         # 체크포인터 데이터도 정리
         try:
-            checkpointer.delete_thread(room_id)
+            await _checkpointer[0].adelete_thread(room_id)
         except Exception:
             pass
 
@@ -148,10 +164,10 @@ def create_app(
         room = room_manager.get(room_id)
         if not room:
             return JSONResponse(status_code=404, content={"detail": "Room not found"})
-        if not default_agent:
+        if not _agent[0]:
             return []
         try:
-            state = await default_agent.aget_state(
+            state = await _agent[0].aget_state(
                 {"configurable": {"thread_id": room_id}}
             )
             msgs = state.values.get("messages", [])
@@ -193,7 +209,7 @@ def create_app(
             # 2) 오염된 체크포인트 전체 삭제
             thread_id = config["configurable"]["thread_id"]
             try:
-                checkpointer.delete_thread(thread_id)
+                await _checkpointer[0].adelete_thread(thread_id)
             except Exception:
                 pass
             # 3) 정상 메시지 복원
@@ -209,7 +225,7 @@ def create_app(
 
         # 세션별 workspace 상태
         session_workspace = default_workspace
-        session_agent = default_agent
+        session_agent = _agent[0]
 
         try:
             while True:
@@ -235,7 +251,7 @@ def create_app(
                         session_workspace = str(new_path)
                         if llm:
                             new_registry = create_tool_registry(session_workspace)
-                            session_agent = create_agent(llm, registry=new_registry, checkpointer=checkpointer)
+                            session_agent = create_agent(llm, registry=new_registry, checkpointer=_checkpointer[0])
                         display = str(new_path).replace(str(Path.home()), "~")
                         logger.info(f"Workspace changed: session={session_id}, path={session_workspace}")
                         await websocket.send_json({

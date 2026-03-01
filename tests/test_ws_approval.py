@@ -32,32 +32,31 @@ def test_ws_dangerous_tool_sends_approval_request(workspace, mock_llm):
 
     registry = create_tool_registry(str(workspace))
     app = create_app(llm=mock_llm, registry=registry)
-    client = TestClient(app)
+    with TestClient(app) as client:
+        with client.websocket_connect("/ws/approval-ws-1") as ws:
+            ws.send_json({"type": "user_message", "content": "test.txt에 hello 써줘"})
 
-    with client.websocket_connect("/ws/approval-ws-1") as ws:
-        ws.send_json({"type": "user_message", "content": "test.txt에 hello 써줘"})
+            # 승인 요청 수신
+            data = ws.receive_json()
+            assert data["type"] == "approval_request"
+            assert data["tool_calls"][0]["tool"] == "file_write"
 
-        # 승인 요청 수신
-        data = ws.receive_json()
-        assert data["type"] == "approval_request"
-        assert data["tool_calls"][0]["tool"] == "file_write"
+            # 승인
+            ws.send_json({"type": "approval_response", "decision": "approved"})
 
-        # 승인
-        ws.send_json({"type": "approval_response", "decision": "approved"})
+            # file_created 알림 (file_write가 action=created 반환)
+            data = ws.receive_json()
+            assert data["type"] == "file_created"
+            assert data["filename"] == "test.txt"
 
-        # file_created 알림 (file_write가 action=created 반환)
-        data = ws.receive_json()
-        assert data["type"] == "file_created"
-        assert data["filename"] == "test.txt"
-
-        # 최종 응답
-        data = ws.receive_json()
-        assert data["type"] == "assistant_chunk"
-        assert "작성" in data["content"]
-        title_ev = ws.receive_json()
-        assert title_ev["type"] == "room_title_updated"
-        done = ws.receive_json()
-        assert done["type"] == "assistant_done"
+            # 최종 응답
+            data = ws.receive_json()
+            assert data["type"] == "assistant_chunk"
+            assert "작성" in data["content"]
+            title_ev = ws.receive_json()
+            assert title_ev["type"] == "room_title_updated"
+            done = ws.receive_json()
+            assert done["type"] == "assistant_done"
 
     # 파일이 실제로 생성되었는지 확인
     assert (workspace / "test.txt").read_text() == "hello"
@@ -80,23 +79,22 @@ def test_ws_dangerous_tool_rejection(workspace, mock_llm):
     (workspace / "important.txt").write_text("keep me")
     registry = create_tool_registry(str(workspace))
     app = create_app(llm=mock_llm, registry=registry)
-    client = TestClient(app)
+    with TestClient(app) as client:
+        with client.websocket_connect("/ws/approval-ws-2") as ws:
+            ws.send_json({"type": "user_message", "content": "important.txt 삭제해줘"})
 
-    with client.websocket_connect("/ws/approval-ws-2") as ws:
-        ws.send_json({"type": "user_message", "content": "important.txt 삭제해줘"})
+            data = ws.receive_json()
+            assert data["type"] == "approval_request"
 
-        data = ws.receive_json()
-        assert data["type"] == "approval_request"
+            ws.send_json({"type": "approval_response", "decision": "rejected"})
 
-        ws.send_json({"type": "approval_response", "decision": "rejected"})
-
-        data = ws.receive_json()
-        assert data["type"] == "assistant_chunk"
-        assert "취소" in data["content"]
-        title_ev = ws.receive_json()
-        assert title_ev["type"] == "room_title_updated"
-        done = ws.receive_json()
-        assert done["type"] == "assistant_done"
+            data = ws.receive_json()
+            assert data["type"] == "assistant_chunk"
+            assert "취소" in data["content"]
+            title_ev = ws.receive_json()
+            assert title_ev["type"] == "room_title_updated"
+            done = ws.receive_json()
+            assert done["type"] == "assistant_done"
 
     # 파일이 삭제되지 않았는지 확인
     assert (workspace / "important.txt").exists()
@@ -120,16 +118,15 @@ def test_ws_safe_tool_no_approval_needed(workspace, mock_llm):
 
     registry = create_tool_registry(str(workspace))
     app = create_app(llm=mock_llm, registry=registry)
-    client = TestClient(app)
+    with TestClient(app) as client:
+        with client.websocket_connect("/ws/approval-ws-3") as ws:
+            ws.send_json({"type": "user_message", "content": "doc.txt 읽어줘"})
 
-    with client.websocket_connect("/ws/approval-ws-3") as ws:
-        ws.send_json({"type": "user_message", "content": "doc.txt 읽어줘"})
-
-        # 승인 요청 없이 바로 응답
-        data = ws.receive_json()
-        assert data["type"] == "assistant_chunk"
-        assert "내용입니다" in data["content"]
-        title_ev = ws.receive_json()
-        assert title_ev["type"] == "room_title_updated"
-        done = ws.receive_json()
-        assert done["type"] == "assistant_done"
+            # 승인 요청 없이 바로 응답
+            data = ws.receive_json()
+            assert data["type"] == "assistant_chunk"
+            assert "내용입니다" in data["content"]
+            title_ev = ws.receive_json()
+            assert title_ev["type"] == "room_title_updated"
+            done = ws.receive_json()
+            assert done["type"] == "assistant_done"

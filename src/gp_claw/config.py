@@ -13,6 +13,7 @@ class Settings(BaseSettings):
     host: str = "0.0.0.0"
     port: int = 8002
     workspace_root: Path = Path("~/.gp_claw/workspace")
+    db_path: Path = Path("~/.gp_claw/gp_claw.db")
 
     # LLM
     llm_temperature: float = 0.3

@@ -105,17 +105,16 @@ async def test_safe_tool_e2e_via_websocket(workspace):
     safe_only = ToolRegistry(safe_tools=registry.safe_tools)
 
     app = create_app(llm=mock_llm, registry=safe_only)
-    client = TestClient(app)
-
-    with client.websocket_connect("/ws/e2e-test") as ws:
-        ws.send_json({"type": "user_message", "content": "memo.txt 읽어줘"})
-        data = ws.receive_json()
-        assert data["type"] == "assistant_chunk"
-        assert "회의는 3시" in data["content"]
-        title_ev = ws.receive_json()
-        assert title_ev["type"] == "room_title_updated"
-        done = ws.receive_json()
-        assert done["type"] == "assistant_done"
+    with TestClient(app) as client:
+        with client.websocket_connect("/ws/e2e-test") as ws:
+            ws.send_json({"type": "user_message", "content": "memo.txt 읽어줘"})
+            data = ws.receive_json()
+            assert data["type"] == "assistant_chunk"
+            assert "회의는 3시" in data["content"]
+            title_ev = ws.receive_json()
+            assert title_ev["type"] == "room_title_updated"
+            done = ws.receive_json()
+            assert done["type"] == "assistant_done"
 
 
 # --- Phase 2C: Approval tests ---

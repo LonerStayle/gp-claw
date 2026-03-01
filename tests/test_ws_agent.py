@@ -12,14 +12,13 @@ def test_websocket_user_message_gets_agent_response():
     mock_llm.ainvoke = AsyncMock(return_value=mock_response)
 
     app = create_app(llm=mock_llm)
-    client = TestClient(app)
-
-    with client.websocket_connect("/ws/test-session") as ws:
-        ws.send_json({"type": "user_message", "content": "안녕"})
-        data = ws.receive_json()
-        assert data["type"] == "assistant_chunk"
-        assert "안녕하세요" in data["content"]
-        title_ev = ws.receive_json()
-        assert title_ev["type"] == "room_title_updated"
-        done = ws.receive_json()
-        assert done["type"] == "assistant_done"
+    with TestClient(app) as client:
+        with client.websocket_connect("/ws/test-session") as ws:
+            ws.send_json({"type": "user_message", "content": "안녕"})
+            data = ws.receive_json()
+            assert data["type"] == "assistant_chunk"
+            assert "안녕하세요" in data["content"]
+            title_ev = ws.receive_json()
+            assert title_ev["type"] == "room_title_updated"
+            done = ws.receive_json()
+            assert done["type"] == "assistant_done"
