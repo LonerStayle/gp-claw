@@ -2,6 +2,7 @@ import { useEffect, useRef } from "react"
 import { ChatMessage } from "@/components/ChatMessage"
 import { ApprovalCard } from "@/components/ApprovalCard"
 import { FileCard } from "@/components/FileCard"
+import { ThinkingBlock } from "@/components/ThinkingBlock"
 import { Loader2 } from "lucide-react"
 import type { Message } from "@/types"
 
@@ -44,6 +45,9 @@ export function ChatContainer({ messages, isWaitingResponse, onApprove, onReject
         }
         if (msg.type === "file_card") {
           return <FileCard key={msg.id} message={msg} onOpen={onOpenFile} />
+        }
+        if (msg.type === "thinking") {
+          return <ThinkingBlock key={msg.id} message={msg} />
         }
         return <ChatMessage key={msg.id} message={msg} />
       })}

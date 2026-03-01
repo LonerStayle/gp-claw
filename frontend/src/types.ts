@@ -44,7 +44,15 @@ export interface FileCardMessage {
   timestamp: number
 }
 
-export type Message = UserMessage | AssistantMessage | ApprovalRequestMessage | ErrorMessage | FileCardMessage
+export interface ThinkingMessage {
+  id: string
+  type: "thinking"
+  content: string
+  isComplete: boolean
+  timestamp: number
+}
+
+export type Message = UserMessage | AssistantMessage | ApprovalRequestMessage | ErrorMessage | FileCardMessage | ThinkingMessage
 
 // --- WebSocket protocol (wire format) ---
 export type WsSend =
@@ -58,6 +66,9 @@ export type WsReceive =
   | { type: "assistant_message"; content: string }
   | { type: "assistant_chunk"; content: string }
   | { type: "assistant_done" }
+  | { type: "thinking_start" }
+  | { type: "thinking_chunk"; content: string }
+  | { type: "thinking_done" }
   | { type: "approval_request"; tool_calls: ToolCall[] }
   | { type: "error"; content: string }
   | { type: "workspace_changed"; path: string; display: string }

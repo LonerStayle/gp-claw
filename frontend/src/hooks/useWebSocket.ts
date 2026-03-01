@@ -43,6 +43,39 @@ export function useWebSocket(): UseWebSocketReturn {
     const data: WsReceive = JSON.parse(event.data)
 
     switch (data.type) {
+      case "thinking_start":
+        setMessages((prev) => [
+          ...prev,
+          { id: crypto.randomUUID(), type: "thinking", content: "", isComplete: false, timestamp: Date.now() },
+        ])
+        break
+
+      case "thinking_chunk":
+        setMessages((prev) => {
+          const last = prev[prev.length - 1]
+          if (last?.type === "thinking") {
+            return [
+              ...prev.slice(0, -1),
+              { ...last, content: last.content + data.content },
+            ]
+          }
+          return prev
+        })
+        break
+
+      case "thinking_done":
+        setMessages((prev) => {
+          const last = prev[prev.length - 1]
+          if (last?.type === "thinking") {
+            return [
+              ...prev.slice(0, -1),
+              { ...last, isComplete: true },
+            ]
+          }
+          return prev
+        })
+        break
+
       case "assistant_chunk":
         setMessages((prev) => {
           const last = prev[prev.length - 1]

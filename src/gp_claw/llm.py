@@ -245,4 +245,5 @@ def create_llm(settings: Settings) -> ToolParsingChatModel:
         temperature=settings.llm_temperature,
         max_tokens=settings.llm_max_tokens,
         streaming=True,
+        timeout=120,  # RunPod 콜드 스타트 (~74초) 대응
     )

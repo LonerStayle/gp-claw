@@ -15,6 +15,19 @@ from gp_claw.tools.registry import ToolRegistry
 logger = logging.getLogger(__name__)
 
 TOOL_TAG = "<tool_call>"
+THINK_OPEN = "<think>"
+THINK_CLOSE = "</think>"
+
+
+def _find_partial_match(text: str, *tags: str) -> int:
+    """text 끝부분에서 tags의 부분 매치가 시작되는 위치를 반환. 없으면 len(text)."""
+    flush_up_to = len(text)
+    for i in range(len(text)):
+        suffix = text[i:]
+        if any(tag.startswith(suffix) for tag in tags):
+            flush_up_to = i
+            break
+    return flush_up_to
 
 
 async def _stream_agent_response(
@@ -22,10 +35,12 @@ async def _stream_agent_response(
 ) -> bool:
     """에이전트 응답을 토큰 단위로 스트리밍.
 
-    <tool_call> 태그가 감지되면 스트리밍을 중단하고 버퍼링합니다.
+    <think> 태그 → thinking_start/thinking_chunk/thinking_done 으로 분리.
+    <tool_call> 태그 → 버퍼링 (프론트엔드에 안 보냄).
     Returns: True if any content was streamed to the client.
     """
     pending = ""
+    in_thinking = False
     tool_detected = False
     has_sent = False
 
@@ -41,36 +56,79 @@ async def _stream_agent_response(
 
         pending += chunk.content
 
-        # 완전한 <tool_call> 태그 발견
-        if TOOL_TAG in pending:
-            idx = pending.index(TOOL_TAG)
-            if idx > 0:
-                await websocket.send_json(
-                    {"type": "assistant_chunk", "content": pending[:idx]}
-                )
-                has_sent = True
-            tool_detected = True
-            continue
+        # pending 버퍼를 반복 처리 (태그 발견 시 나머지 재처리)
+        changed = True
+        while changed and pending:
+            changed = False
 
-        # <tool_call> 의 부분 매치 확인 — 매치 가능한 부분은 보류
-        flush_up_to = len(pending)
-        for i in range(len(pending)):
-            if TOOL_TAG.startswith(pending[i:]):
-                flush_up_to = i
-                break
+            if in_thinking:
+                # </think> 완전 매치
+                if THINK_CLOSE in pending:
+                    idx = pending.index(THINK_CLOSE)
+                    if idx > 0:
+                        await websocket.send_json(
+                            {"type": "thinking_chunk", "content": pending[:idx]}
+                        )
+                    pending = pending[idx + len(THINK_CLOSE):]
+                    in_thinking = False
+                    await websocket.send_json({"type": "thinking_done"})
+                    has_sent = True
+                    changed = True  # 나머지 pending 재처리
+                else:
+                    # </think> 부분 매치 — 안전한 부분만 전송
+                    flush_up_to = _find_partial_match(pending, THINK_CLOSE)
+                    if flush_up_to > 0:
+                        await websocket.send_json(
+                            {"type": "thinking_chunk", "content": pending[:flush_up_to]}
+                        )
+                        pending = pending[flush_up_to:]
 
-        if flush_up_to > 0:
-            await websocket.send_json(
-                {"type": "assistant_chunk", "content": pending[:flush_up_to]}
-            )
-            has_sent = True
-            pending = pending[flush_up_to:]
+            else:
+                # <think> 완전 매치
+                if THINK_OPEN in pending:
+                    idx = pending.index(THINK_OPEN)
+                    if idx > 0:
+                        await websocket.send_json(
+                            {"type": "assistant_chunk", "content": pending[:idx]}
+                        )
+                        has_sent = True
+                    pending = pending[idx + len(THINK_OPEN):]
+                    in_thinking = True
+                    await websocket.send_json({"type": "thinking_start"})
+                    changed = True  # 나머지 pending 재처리
+
+                # <tool_call> 완전 매치
+                elif TOOL_TAG in pending:
+                    idx = pending.index(TOOL_TAG)
+                    if idx > 0:
+                        await websocket.send_json(
+                            {"type": "assistant_chunk", "content": pending[:idx]}
+                        )
+                        has_sent = True
+                    tool_detected = True
+                    break
+
+                else:
+                    # 부분 매치 — 안전한 부분만 전송
+                    flush_up_to = _find_partial_match(pending, THINK_OPEN, TOOL_TAG)
+                    if flush_up_to > 0:
+                        await websocket.send_json(
+                            {"type": "assistant_chunk", "content": pending[:flush_up_to]}
+                        )
+                        has_sent = True
+                        pending = pending[flush_up_to:]
 
     # 스트리밍 종료 — 남은 pending 전송
     if not tool_detected and pending:
-        await websocket.send_json(
-            {"type": "assistant_chunk", "content": pending}
-        )
+        if in_thinking:
+            await websocket.send_json(
+                {"type": "thinking_chunk", "content": pending}
+            )
+            await websocket.send_json({"type": "thinking_done"})
+        else:
+            await websocket.send_json(
+                {"type": "assistant_chunk", "content": pending}
+            )
         has_sent = True
 
     return has_sent
@@ -170,12 +228,24 @@ def create_app(
 
                     if session_agent:
                         try:
-                            # 스트리밍 응답
-                            streamed = await _stream_agent_response(
-                                session_agent, websocket,
-                                {"messages": [HumanMessage(content=content)]},
-                                config,
-                            )
+                            # 스트리밍 응답 (빈 스트림 시 1회 재시도)
+                            input_data = {"messages": [HumanMessage(content=content)]}
+                            try:
+                                streamed = await _stream_agent_response(
+                                    session_agent, websocket, input_data, config,
+                                )
+                            except ValueError as ve:
+                                if "No generations found in stream" in str(ve):
+                                    logger.warning("Empty stream from LLM, retrying once...")
+                                    await websocket.send_json({
+                                        "type": "assistant_chunk",
+                                        "content": "서버가 준비 중입니다. 재시도 중...\n\n",
+                                    })
+                                    streamed = await _stream_agent_response(
+                                        session_agent, websocket, input_data, config,
+                                    )
+                                else:
+                                    raise
 
                             # interrupt 처리 (approval 루프)
                             state = await session_agent.aget_state(config)
@@ -236,6 +306,19 @@ def create_app(
                                         })
 
                             await websocket.send_json({"type": "assistant_done"})
+                        except ValueError as ve:
+                            if "No generations found in stream" in str(ve):
+                                logger.warning(f"Empty LLM stream: {ve}")
+                                await websocket.send_json({
+                                    "type": "error",
+                                    "content": "AI 서버가 응답하지 않았습니다. 잠시 후 다시 시도해 주세요. (RunPod 콜드 스타트일 수 있습니다)",
+                                })
+                            else:
+                                logger.error(f"Agent error: {ve}", exc_info=True)
+                                await websocket.send_json({
+                                    "type": "error",
+                                    "content": f"LLM 오류: {ve}",
+                                })
                         except Exception as e:
                             logger.error(f"Agent error: {e}", exc_info=True)
                             await websocket.send_json({

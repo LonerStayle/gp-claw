@@ -5,7 +5,7 @@
 ## Goal
 
 **GP Claw** — 회사 내부 AI 사무 비서. 파일/문서/Gmail 관리, 위험 작업은 승인 필수.
-자체 호스팅 LLM(Qwen/Qwen2.5-14B-Instruct) + RunPod Serverless GPU.
+자체 호스팅 LLM(Qwen/Qwen3-8B) + RunPod Serverless GPU.
 
 ## Current Progress
 
@@ -21,7 +21,7 @@
 | 4.3 프롬프트 강화 | ✅ | 한국어 few-shot 시스템 프롬프트 (temperature 0.3) |
 | 5. 사무용 도구 + MD 렌더링 | ✅ | excel/csv/pdf/pptx 도구 + Markdown 렌더링 (62 tests) |
 | 5.1 파일 열기 기능 | ✅ | file_open 도구 + FileCard UI + 열기 버튼 |
-| 5.2 모델 교체 | ✅ | skt/A.X-4.0-Light → Qwen/Qwen2.5-14B-Instruct |
+| 5.2 모델 교체 | ✅ | skt/A.X-4.0-Light → Qwen2.5-14B → **Qwen3-8B** |
 
 ## 아키텍처
 
@@ -74,7 +74,10 @@ Client → Server:  {"type": "user_message", "content": "..."}
                   {"type": "open_file", "path": "report.xlsx"}
                   {"type": "ping"}
 
-Server → Client:  {"type": "assistant_chunk", "content": "토큰"}     ← 스트리밍
+Server → Client:  {"type": "thinking_start"}                            ← 생각 시작
+                  {"type": "thinking_chunk", "content": "추론"}       ← 생각 스트리밍
+                  {"type": "thinking_done"}                            ← 생각 완료
+                  {"type": "assistant_chunk", "content": "토큰"}     ← 스트리밍
                   {"type": "assistant_done"}                          ← 스트리밍 완료
                   {"type": "approval_request", "tool_calls": [{tool, args, preview}]}
                   {"type": "file_created", "path": "...", "filename": "...", "size_bytes": 0}
@@ -106,7 +109,8 @@ server.py._stream_agent_response()
 ## 알려진 이슈
 
 1. **test_config.py 2개 실패** — `~` 경로 확장 테스트 (기존 버그, 기능에 영향 없음)
-2. **RunPod 콜드 스타트** — 첫 요청 시 500 에러 가능. 워커가 활성화되면 정상
+2. **RunPod 콜드 스타트** — 첫 요청 시 빈 스트림 가능. 자동 1회 재시도 로직 추가됨
+3. **VLLM_MODEL_NAME 대소문자** — RunPod이 모델명을 소문자로 등록하므로 `.env`도 소문자 필수
 
 ## 실행 방법
 
@@ -124,7 +128,7 @@ cd frontend && npm run dev  # → :5173 (proxy → :8002)
 # RunPod vLLM
 RUNPOD_API_KEY=rpa_...
 RUNPOD_ENDPOINT_ID=엔드포인트_ID
-VLLM_MODEL_NAME=Qwen/Qwen2.5-14B-Instruct
+VLLM_MODEL_NAME=qwen/qwen3-8b
 
 # Server
 PORT=8002
@@ -145,7 +149,7 @@ LLM_TEMPERATURE=0.3
 - ✅ 사무용 파일 생성 (엑셀, CSV, PDF, PPT)
 - ✅ Markdown 렌더링 (react-markdown + remark-gfm)
 - ✅ 파일 열기 (file_open 도구 + FileCard UI + 열기 버튼)
-- ✅ 모델 교체 (skt/A.X-4.0-Light → Qwen/Qwen2.5-14B-Instruct)
+- ✅ 모델 교체 (skt/A.X-4.0-Light → Qwen2.5-14B → Qwen3-8B)
 
 ### 장기적 방향 (추정)
 - Gmail 연동 (설계 문서에 명시됨)
