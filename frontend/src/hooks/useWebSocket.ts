@@ -14,8 +14,10 @@ interface UseWebSocketReturn {
   connectionStatus: ConnectionStatus
   isWaitingResponse: boolean
   isWaitingApproval: boolean
+  currentWorkspace: string | null
   sendMessage: (content: string) => void
   sendApproval: (decision: "approved" | "rejected") => void
+  setWorkspace: (path: string) => void
 }
 
 export function useWebSocket(): UseWebSocketReturn {
@@ -23,6 +25,7 @@ export function useWebSocket(): UseWebSocketReturn {
   const [connectionStatus, setConnectionStatus] = useState<ConnectionStatus>("disconnected")
   const [isWaitingResponse, setIsWaitingResponse] = useState(false)
   const [isWaitingApproval, setIsWaitingApproval] = useState(false)
+  const [currentWorkspace, setCurrentWorkspace] = useState<string | null>(null)
 
   const wsRef = useRef<WebSocket | null>(null)
   const reconnectAttemptRef = useRef(0)
@@ -69,6 +72,17 @@ export function useWebSocket(): UseWebSocketReturn {
         ])
         setIsWaitingResponse(false)
         setIsWaitingApproval(false)
+        break
+
+      case "workspace_changed":
+        setCurrentWorkspace(data.display)
+        break
+
+      case "workspace_error":
+        setMessages((prev) => [
+          ...prev,
+          { id: crypto.randomUUID(), type: "error", content: data.content },
+        ])
         break
 
       case "pong":
@@ -148,12 +162,21 @@ export function useWebSocket(): UseWebSocketReturn {
     [send]
   )
 
+  const setWorkspace = useCallback(
+    (path: string) => {
+      send({ type: "set_workspace", path })
+    },
+    [send]
+  )
+
   return {
     messages,
     connectionStatus,
     isWaitingResponse,
     isWaitingApproval,
+    currentWorkspace,
     sendMessage,
     sendApproval,
+    setWorkspace,
   }
 }

@@ -37,12 +37,15 @@ export type Message = UserMessage | AssistantMessage | ApprovalRequestMessage | 
 export type WsSend =
   | { type: "user_message"; content: string }
   | { type: "approval_response"; decision: "approved" | "rejected" }
+  | { type: "set_workspace"; path: string }
   | { type: "ping" }
 
 export type WsReceive =
   | { type: "assistant_message"; content: string }
   | { type: "approval_request"; tool_calls: ToolCall[] }
   | { type: "error"; content: string }
+  | { type: "workspace_changed"; path: string; display: string }
+  | { type: "workspace_error"; content: string }
   | { type: "pong" }
 
 // --- Connection status ---

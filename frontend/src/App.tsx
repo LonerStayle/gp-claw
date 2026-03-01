@@ -1,6 +1,7 @@
 import { ChatContainer } from "@/components/ChatContainer"
 import { ChatInput } from "@/components/ChatInput"
 import { ConnectionStatus } from "@/components/ConnectionStatus"
+import { FolderPicker } from "@/components/FolderPicker"
 import { useWebSocket } from "@/hooks/useWebSocket"
 import { Cog } from "lucide-react"
 
@@ -10,8 +11,10 @@ function App() {
     connectionStatus,
     isWaitingResponse,
     isWaitingApproval,
+    currentWorkspace,
     sendMessage,
     sendApproval,
+    setWorkspace,
   } = useWebSocket()
 
   return (
@@ -21,6 +24,8 @@ function App() {
         <div className="flex items-center gap-2">
           <Cog className="h-5 w-5 text-primary" />
           <h1 className="text-lg font-semibold text-foreground">GP Claw</h1>
+          <span className="text-border">|</span>
+          <FolderPicker currentWorkspace={currentWorkspace} onSetWorkspace={setWorkspace} />
         </div>
         <ConnectionStatus status={connectionStatus} />
       </header>
