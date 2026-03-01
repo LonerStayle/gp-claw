@@ -110,8 +110,10 @@ async def test_safe_tool_e2e_via_websocket(workspace):
     with client.websocket_connect("/ws/e2e-test") as ws:
         ws.send_json({"type": "user_message", "content": "memo.txt 읽어줘"})
         data = ws.receive_json()
-        assert data["type"] == "assistant_message"
+        assert data["type"] == "assistant_chunk"
         assert "회의는 3시" in data["content"]
+        done = ws.receive_json()
+        assert done["type"] == "assistant_done"
 
 
 # --- Phase 2C: Approval tests ---

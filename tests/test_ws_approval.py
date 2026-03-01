@@ -47,8 +47,10 @@ def test_ws_dangerous_tool_sends_approval_request(workspace, mock_llm):
 
         # 최종 응답
         data = ws.receive_json()
-        assert data["type"] == "assistant_message"
+        assert data["type"] == "assistant_chunk"
         assert "작성" in data["content"]
+        done = ws.receive_json()
+        assert done["type"] == "assistant_done"
 
     # 파일이 실제로 생성되었는지 확인
     assert (workspace / "test.txt").read_text() == "hello"
@@ -82,8 +84,10 @@ def test_ws_dangerous_tool_rejection(workspace, mock_llm):
         ws.send_json({"type": "approval_response", "decision": "rejected"})
 
         data = ws.receive_json()
-        assert data["type"] == "assistant_message"
+        assert data["type"] == "assistant_chunk"
         assert "취소" in data["content"]
+        done = ws.receive_json()
+        assert done["type"] == "assistant_done"
 
     # 파일이 삭제되지 않았는지 확인
     assert (workspace / "important.txt").exists()
@@ -114,5 +118,7 @@ def test_ws_safe_tool_no_approval_needed(workspace, mock_llm):
 
         # 승인 요청 없이 바로 응답
         data = ws.receive_json()
-        assert data["type"] == "assistant_message"
+        assert data["type"] == "assistant_chunk"
         assert "내용입니다" in data["content"]
+        done = ws.receive_json()
+        assert done["type"] == "assistant_done"

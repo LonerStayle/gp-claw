@@ -1,11 +1,12 @@
 import json
 import re
 import uuid
+from collections.abc import AsyncIterator
 from typing import Any
 
 from langchain_core.callbacks import CallbackManagerForLLMRun
-from langchain_core.messages import AIMessage, BaseMessage
-from langchain_core.outputs import ChatGeneration, ChatResult
+from langchain_core.messages import AIMessage, AIMessageChunk, BaseMessage, SystemMessage
+from langchain_core.outputs import ChatGeneration, ChatGenerationChunk, ChatResult
 from langchain_openai import ChatOpenAI
 
 from gp_claw.config import Settings
@@ -106,7 +107,6 @@ class ToolParsingChatModel(ChatOpenAI):
         if self._tools_system_prompt:
             kwargs.pop("tools", None)
             kwargs.pop("tool_choice", None)
-            from langchain_core.messages import SystemMessage
             has_system = any(isinstance(m, SystemMessage) for m in messages)
             if not has_system:
                 messages = [SystemMessage(content=self._tools_system_prompt)] + list(messages)
@@ -146,7 +146,6 @@ class ToolParsingChatModel(ChatOpenAI):
         if self._tools_system_prompt:
             kwargs.pop("tools", None)
             kwargs.pop("tool_choice", None)
-            from langchain_core.messages import SystemMessage
             has_system = any(isinstance(m, SystemMessage) for m in messages)
             if not has_system:
                 messages = [SystemMessage(content=self._tools_system_prompt)] + list(messages)
@@ -174,6 +173,47 @@ class ToolParsingChatModel(ChatOpenAI):
                     ]
 
         return result
+
+    async def _astream(
+        self,
+        messages: list[BaseMessage],
+        stop: list[str] | None = None,
+        run_manager: Any = None,
+        **kwargs: Any,
+    ) -> AsyncIterator[ChatGenerationChunk]:
+        """스트리밍 + 시스템 프롬프트 주입 + tool_call 파싱."""
+        # 시스템 프롬프트 주입
+        if self._tools_system_prompt:
+            kwargs.pop("tools", None)
+            kwargs.pop("tool_choice", None)
+            has_system = any(isinstance(m, SystemMessage) for m in messages)
+            if not has_system:
+                messages = [SystemMessage(content=self._tools_system_prompt)] + list(messages)
+
+        # 청크를 모으면서 스트리밍
+        full_content = ""
+        async for chunk in super()._astream(messages, stop=stop, run_manager=run_manager, **kwargs):
+            if isinstance(chunk.message, AIMessageChunk) and chunk.message.content:
+                full_content += chunk.message.content
+            yield chunk
+
+        # 스트리밍 완료 후 tool_call 파싱
+        if full_content:
+            _, tool_calls = _parse_tool_calls(full_content)
+            if tool_calls:
+                tc_msg = AIMessageChunk(
+                    content="",
+                    tool_call_chunks=[
+                        {
+                            "id": tc["id"],
+                            "name": tc["name"],
+                            "args": json.dumps(tc["args"], ensure_ascii=False),
+                            "index": i,
+                        }
+                        for i, tc in enumerate(tool_calls)
+                    ],
+                )
+                yield ChatGenerationChunk(message=tc_msg)
 
 
 def create_llm(settings: Settings) -> ToolParsingChatModel:

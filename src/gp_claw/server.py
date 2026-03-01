@@ -19,13 +19,15 @@ TOOL_TAG = "<tool_call>"
 
 async def _stream_agent_response(
     agent: Any, websocket: WebSocket, input_data: Any, config: dict
-) -> None:
+) -> bool:
     """에이전트 응답을 토큰 단위로 스트리밍.
 
     <tool_call> 태그가 감지되면 스트리밍을 중단하고 버퍼링합니다.
+    Returns: True if any content was streamed to the client.
     """
     pending = ""
     tool_detected = False
+    has_sent = False
 
     async for event in agent.astream_events(input_data, config, version="v2"):
         if event["event"] != "on_chat_model_stream":
@@ -46,6 +48,7 @@ async def _stream_agent_response(
                 await websocket.send_json(
                     {"type": "assistant_chunk", "content": pending[:idx]}
                 )
+                has_sent = True
             tool_detected = True
             continue
 
@@ -60,6 +63,7 @@ async def _stream_agent_response(
             await websocket.send_json(
                 {"type": "assistant_chunk", "content": pending[:flush_up_to]}
             )
+            has_sent = True
             pending = pending[flush_up_to:]
 
     # 스트리밍 종료 — 남은 pending 전송
@@ -67,6 +71,9 @@ async def _stream_agent_response(
         await websocket.send_json(
             {"type": "assistant_chunk", "content": pending}
         )
+        has_sent = True
+
+    return has_sent
 
 
 def create_app(
@@ -139,7 +146,7 @@ def create_app(
                     if session_agent:
                         try:
                             # 스트리밍 응답
-                            await _stream_agent_response(
+                            streamed = await _stream_agent_response(
                                 session_agent, websocket,
                                 {"messages": [HumanMessage(content=content)]},
                                 config,
@@ -161,11 +168,23 @@ def create_app(
                                     decision = "rejected"
 
                                 # resume도 스트리밍
-                                await _stream_agent_response(
+                                streamed = await _stream_agent_response(
                                     session_agent, websocket,
                                     Command(resume=decision), config,
                                 )
                                 state = await session_agent.aget_state(config)
+
+                            # Fallback: 스트리밍 이벤트 없으면 최종 메시지에서 가져옴
+                            if not streamed:
+                                final_state = await session_agent.aget_state(config)
+                                msgs = final_state.values.get("messages", [])
+                                if msgs:
+                                    last_msg = msgs[-1]
+                                    if hasattr(last_msg, "content") and last_msg.content:
+                                        await websocket.send_json({
+                                            "type": "assistant_chunk",
+                                            "content": last_msg.content,
+                                        })
 
                             await websocket.send_json({"type": "assistant_done"})
                         except Exception as e:

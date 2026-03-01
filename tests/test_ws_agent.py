@@ -17,5 +17,7 @@ def test_websocket_user_message_gets_agent_response():
     with client.websocket_connect("/ws/test-session") as ws:
         ws.send_json({"type": "user_message", "content": "안녕"})
         data = ws.receive_json()
-        assert data["type"] == "assistant_message"
+        assert data["type"] == "assistant_chunk"
         assert "안녕하세요" in data["content"]
+        done = ws.receive_json()
+        assert done["type"] == "assistant_done"
