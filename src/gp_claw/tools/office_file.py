@@ -1,10 +1,25 @@
 import csv
 import io
+import platform
+import subprocess
 from pathlib import Path
 
 from langchain_core.tools import tool
 
 from gp_claw.security import validate_path
+
+
+def _open_with_os(filepath: str) -> None:
+    """OS 기본 프로그램으로 파일 열기."""
+    system = platform.system()
+    if system == "Darwin":
+        subprocess.Popen(["open", filepath])
+    elif system == "Windows":
+        import os
+
+        os.startfile(filepath)
+    else:
+        subprocess.Popen(["xdg-open", filepath])
 
 
 def create_office_tools(workspace_root: str) -> list:
@@ -176,4 +191,21 @@ def create_office_tools(workspace_root: str) -> list:
             "slides": len(slides) + 1,
         }
 
-    return [excel_write, csv_write, pdf_write, pptx_write]
+    @tool
+    def file_open(path: str) -> dict:
+        """지정된 파일을 PC의 기본 프로그램으로 엽니다. (승인 필요)
+
+        Args:
+            path: 워크스페이스 내 파일 경로
+        """
+        validated = validate_path(path, workspace_root)
+        if not validated.exists():
+            raise FileNotFoundError(f"파일을 찾을 수 없습니다: {path}")
+        _open_with_os(str(validated))
+        return {
+            "path": str(validated),
+            "action": "opened",
+            "filename": validated.name,
+        }
+
+    return [excel_write, csv_write, pdf_write, pptx_write, file_open]
