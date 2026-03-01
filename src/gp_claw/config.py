@@ -15,8 +15,8 @@ class Settings(BaseSettings):
     workspace_root: Path = Path("~/.gp_claw/workspace")
 
     # LLM
-    llm_temperature: float = 0.6
-    llm_max_tokens: int = 1024
+    llm_temperature: float = 0.3
+    llm_max_tokens: int = 4096
 
     @property
     def vllm_base_url(self) -> str:
