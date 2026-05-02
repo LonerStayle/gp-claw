@@ -15,6 +15,12 @@ from langgraph.types import Command
 from pydantic import BaseModel
 
 from gp_claw.agent import create_agent
+from gp_claw.extraction import (
+    SUMMARY_THRESHOLD_CHARS,
+    build_attachment_context,
+    load_attachment_meta,
+    process_attachment,
+)
 from gp_claw.files import (
     FileUploadError,
     cleanup_room_files,
@@ -267,7 +273,35 @@ def create_app(
                 content={"error": "파일 저장 실패", "code": "WRITE_FAILED"},
             )
 
-        # 5) 응답 — 항상 프로젝트 루트 기준 상대 경로
+        # 5) 본문 추출 + 임계치 분기 + 메타 캐시 (동기 처리 — 자유 영역)
+        extraction_status: dict[str, Any] = {"extraction": "ready"}
+        try:
+            meta = await process_attachment(
+                file_path=target_path,
+                sandbox_root=sandbox_root,
+                room_id=room_id,
+                filename=target_path.name,
+                llm=llm,
+                threshold=SUMMARY_THRESHOLD_CHARS,
+            )
+            extraction_status = {
+                "extraction": "error" if meta.get("mode") == "error" else "ready",
+                "extraction_mode": meta.get("mode"),
+                "extracted_chars": meta.get("extracted_chars", 0),
+                "summary_chars": meta.get("summary_chars", 0),
+                "degraded": bool(meta.get("degraded")),
+                "extraction_error": meta.get("error"),
+            }
+        except Exception as ex:  # noqa: BLE001
+            logger.error(f"Attachment extraction failed: {ex}", exc_info=True)
+            extraction_status = {
+                "extraction": "error",
+                "extraction_mode": "error",
+                "degraded": True,
+                "extraction_error": str(ex),
+            }
+
+        # 6) 응답 — 항상 프로젝트 루트 기준 상대 경로
         rel_path = relative_sandbox_path(target_path, sandbox_project_root)
         logger.info(
             f"[UPLOAD] ok room_id={room_id!r} path={rel_path!r} "
@@ -280,6 +314,7 @@ def create_app(
                 "size": total,
                 "mime": guess_mime(safe_name),
                 "filename": target_path.name,
+                **extraction_status,
             },
         )
 
@@ -320,6 +355,30 @@ def create_app(
     @app.get("/rooms/{room_id}/files/{filename}")
     async def get_file(room_id: str, filename: str):
         return await _serve_file(room_id, filename)
+
+    @app.get("/api/rooms/{room_id}/files/{filename}/extraction")
+    async def get_extraction_status(room_id: str, filename: str):
+        """추출 상태 폴링용 엔드포인트.
+
+        sandbox/<room_id>/.meta/<filename>.json 의 메타를 반환.
+        """
+        if not is_valid_room_id(room_id):
+            return JSONResponse(
+                status_code=400,
+                content={"error": "유효하지 않은 room_id", "code": "INVALID_ROOM"},
+            )
+        # filename 도 sanitize 일치하는지 검증
+        safe_name = sanitize_filename(filename)
+        sandbox_root = resolve_sandbox_root(sandbox_project_root)
+        meta = load_attachment_meta(
+            sandbox_root=sandbox_root, room_id=room_id, filename=safe_name
+        )
+        if meta is None:
+            return JSONResponse(
+                status_code=404,
+                content={"error": "메타가 없습니다", "code": "NOT_FOUND"},
+            )
+        return JSONResponse(status_code=200, content=meta)
 
     @app.get("/rooms/{room_id}/messages")
     async def get_room_messages(room_id: str):
@@ -449,15 +508,15 @@ def create_app(
 
                 elif data.get("type") == "user_message":
                     content = data.get("content", "")
-                    attachments_meta = data.get("attachments") or []
+                    attachments = data.get("attachments") or []
                     logger.info(
                         f"[WS] user_message session={session_id} "
-                        f"len(content)={len(content)} attachments={len(attachments_meta)} "
+                        f"len(content)={len(content)} attachments={len(attachments)} "
                         f"agent_ready={bool(session_agent)} "
                         f"preview={content[:120]!r}{'...' if len(content) > 120 else ''}"
                     )
-                    if attachments_meta:
-                        for a in attachments_meta:
+                    if attachments:
+                        for a in attachments:
                             logger.info(
                                 f"[WS]   attachment: path={a.get('path')!r} "
                                 f"size={a.get('size')} mime={a.get('mime')!r}"
@@ -470,11 +529,23 @@ def create_app(
                     room_manager.touch(session_id)
                     is_first_message = room_manager.get(session_id).title == "새 대화"
 
+                    # 첨부 본문을 LLM 컨텍스트로 prepend (spec 성공기준 #1, #2, #3)
+                    sandbox_root_path = resolve_sandbox_root(sandbox_project_root)
+                    llm_content = build_attachment_context(
+                        sandbox_root=sandbox_root_path,
+                        attachments=attachments if isinstance(attachments, list) else [],
+                        user_text=content,
+                    )
+
                     if session_agent:
                         try:
                             # 스트리밍 응답 (빈 스트림 시 1회 재시도)
-                            logger.info(f"[WS] starting agent stream session={session_id}")
-                            input_data = {"messages": [HumanMessage(content=content)]}
+                            logger.info(
+                                f"[WS] starting agent stream session={session_id} "
+                                f"llm_content_len={len(llm_content)} "
+                                f"prepended={len(llm_content) > len(content)}"
+                            )
+                            input_data = {"messages": [HumanMessage(content=llm_content)]}
                             try:
                                 streamed = await _stream_agent_response(
                                     session_agent, websocket, input_data, config,

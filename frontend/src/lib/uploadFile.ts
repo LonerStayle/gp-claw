@@ -82,12 +82,18 @@ export function uploadFile(
         // ignore
       }
       if (xhr.status >= 200 && xhr.status < 300) {
-        const r = body as Partial<UploadResponse> & { filename?: string }
+        const r = body as Partial<UploadResponse> & {
+          filename?: string
+          extraction?: "ready" | "summarizing" | "error"
+          extraction_mode?: "raw" | "summary" | "truncated" | "error"
+          degraded?: boolean
+          extraction_error?: string | null
+        }
         if (!r || typeof r.path !== "string") {
           reject(new UploadError("UNKNOWN", "잘못된 서버 응답"))
           return
         }
-        // server returns { path, size, mime, filename } — extract filename from path if missing
+        // server returns { path, size, mime, filename, extraction, extraction_mode, degraded, extraction_error }
         const filename =
           r.filename ?? r.path.split("/").pop() ?? file.name
         resolve({
@@ -95,6 +101,10 @@ export function uploadFile(
           filename,
           size: r.size ?? file.size,
           mime: r.mime ?? file.type,
+          extraction: r.extraction,
+          extraction_mode: r.extraction_mode,
+          degraded: r.degraded,
+          extraction_error: r.extraction_error,
         })
       } else {
         const r = body as { code?: UploadErrorCode; error?: string } | null
