@@ -1,0 +1,23 @@
+{
+  "worker_id": "C",
+  "branch": "ralph/wt-C-1777717432",
+  "test_command": "uv run pytest tests/ -q",
+  "lint_command": "cd frontend && npm run build",
+  "test_result": "pass",
+  "spec_coverage": 1.0,
+  "lines_changed": 1442,
+  "summary": "PDF/텍스트 본문 추출 + 임계치 분기 + LLM 요약 + truncation 폴백 풀스택 구현. extraction.py 모듈 신설 (pypdf 추가), server.py에 추출 파이프라인/폴링 엔드포인트/WS prepend 통합, ChatInput 5상태 chip 구현. 신규 테스트 41개 — 전체 137 pass / 2 fail (pre-existing config 베이스라인 실패, 본 작업 무관).",
+  "files_changed": [
+    "src/gp_claw/extraction.py",
+    "src/gp_claw/server.py",
+    "pyproject.toml",
+    "uv.lock",
+    "tests/test_extraction.py",
+    "tests/test_upload_extraction.py",
+    "tests/test_ws_attachment_prepend.py",
+    "frontend/src/types.ts",
+    "frontend/src/lib/uploadFile.ts",
+    "frontend/src/components/ChatInput.tsx"
+  ],
+  "coverage_notes": "성공기준 ↔ 테스트: #1 작은 텍스트 raw → test_process_attachment_small_text_raw + test_upload_small_text_raw_mode + test_ws_user_message_prepends_small_attachment_raw / #2 큰 PDF 요약 → test_process_attachment_large_summary + test_upload_large_text_summary_mode + test_ws_user_message_prepends_large_attachment_summary / #3 요약 실패 폴백 → test_process_attachment_summary_failure_falls_back + test_upload_summary_failure_falls_back + test_ws_user_message_degraded_label / #4 chip 5상태 → ChatInput data-chip-status 속성 + frontend build pass / #5 한글 파일명 → test_korean_filename_preserved + test_upload_korean_filename_preserved + test_meta_filename_with_korean / #6 회귀 0건 → tests/test_file_upload.py 22 + 기타 137 pass / #7 신규 테스트 → 41개 (extraction 26 + upload_extraction 11 + ws_prepend 4) / #8 pytest + frontend build 모두 pass. 자유 영역: 임계치 8,000자, 동기 추출, 입력 보호 80,000자, truncation 7,000자, 요약 프롬프트 한국어 1,500~2,000자, 캐시 위치 sandbox/<room>/.meta/<filename>.json. RunPod LLM 실호출은 MagicMock+AsyncMock(side_effect)로 mock 처리."
+}

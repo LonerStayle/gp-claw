@@ -181,6 +181,7 @@ function App() {
                 <ChatInput
                   onSend={sendMessage}
                   disabled={isWaitingResponse || isWaitingApproval || connectionStatus !== "connected"}
+                  roomId={activeRoomId}
                 />
               </>
             )}

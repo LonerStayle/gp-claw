@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react"
-import type { ConnectionStatus, Message, WsReceive, WsSend } from "@/types"
+import type { ConnectionStatus, FileAttachment, Message, WsReceive, WsSend } from "@/types"
 
 interface UseWebSocketReturn {
   messages: Message[]
@@ -7,7 +7,7 @@ interface UseWebSocketReturn {
   isWaitingResponse: boolean
   isWaitingApproval: boolean
   currentWorkspace: string | null
-  sendMessage: (content: string) => void
+  sendMessage: (content: string, attachments?: FileAttachment[]) => void
   sendApproval: (decision: "approved" | "rejected") => void
   setWorkspace: (path: string) => void
   openFile: (path: string) => void
@@ -235,14 +235,32 @@ export function useWebSocket(
   }, [roomId, connect, cleanup])
 
   const sendMessage = useCallback(
-    (content: string) => {
-      if (!content.trim()) return
+    (content: string, attachments?: FileAttachment[]) => {
+      const hasAttach = !!attachments && attachments.length > 0
+      if (!content.trim() && !hasAttach) return
       setMessages((prev) => [
         ...prev,
-        { id: crypto.randomUUID(), type: "user", content, timestamp: Date.now() },
+        {
+          id: crypto.randomUUID(),
+          type: "user",
+          content,
+          timestamp: Date.now(),
+          ...(hasAttach ? { attachments } : {}),
+        },
       ])
       setIsWaitingResponse(true)
-      send({ type: "user_message", content })
+      // 경로를 content 본문에도 추가해 백엔드(LangGraph 체크포인트)에 함께 저장.
+      // LLM에는 파일 내용을 주입하지 않으나, 경로 자체는 메시지 일부로 보존됨.
+      const pathLines = hasAttach
+        ? "\n\n첨부 파일:\n" +
+          (attachments as FileAttachment[]).map((a) => `- ${a.path}`).join("\n")
+        : ""
+      const wireContent = (content + pathLines).trimStart()
+      send({
+        type: "user_message",
+        content: wireContent,
+        ...(hasAttach ? { attachments } : {}),
+      })
     },
     [send]
   )

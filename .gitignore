@@ -17,3 +17,6 @@ skills-lock.json
 .agent/
 .agents/
 .vscode/
+
+# 첨부 파일 샌드박스
+sandbox/

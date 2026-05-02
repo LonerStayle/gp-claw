@@ -6,8 +6,8 @@ from pathlib import Path
 from typing import Any
 
 import aiosqlite
-from fastapi import FastAPI, Query, WebSocket, WebSocketDisconnect
-from fastapi.responses import JSONResponse
+from fastapi import FastAPI, File, Query, UploadFile, WebSocket, WebSocketDisconnect
+from fastapi.responses import FileResponse, JSONResponse
 from langchain_core.messages import AIMessage, HumanMessage
 from langchain_openai import ChatOpenAI
 from langgraph.checkpoint.sqlite.aio import AsyncSqliteSaver
@@ -15,6 +15,25 @@ from langgraph.types import Command
 from pydantic import BaseModel
 
 from gp_claw.agent import create_agent
+from gp_claw.extraction import (
+    SUMMARY_THRESHOLD_CHARS,
+    build_attachment_context,
+    load_attachment_meta,
+    process_attachment,
+)
+from gp_claw.files import (
+    FileUploadError,
+    cleanup_room_files,
+    guess_mime,
+    is_valid_room_id,
+    relative_sandbox_path,
+    resolve_sandbox_root,
+    resolve_unique_path,
+    sanitize_filename,
+    validate_extension,
+    validate_size,
+    MAX_FILE_SIZE_BYTES,
+)
 from gp_claw.messages import MessageStore
 from gp_claw.rooms import RoomManager
 from gp_claw.tools import create_tool_registry
@@ -36,8 +55,13 @@ async def _stream_agent_response(
     pending = ""
     tool_detected = False
     has_sent = False
+    event_count = 0
+    chunk_count = 0
+    total_chars = 0
+    logger.info(f"[STREAM] begin (input_messages={len(input_data.get('messages', [])) if isinstance(input_data, dict) else 'n/a'})")
 
     async for event in agent.astream_events(input_data, config, version="v2"):
+        event_count += 1
         if event["event"] != "on_chat_model_stream":
             continue
         chunk = event["data"]["chunk"]
@@ -47,6 +71,8 @@ async def _stream_agent_response(
         if tool_detected:
             continue
 
+        chunk_count += 1
+        total_chars += len(chunk.content)
         pending += chunk.content
 
         # 완전한 <tool_call> 태그 발견
@@ -81,6 +107,10 @@ async def _stream_agent_response(
         )
         has_sent = True
 
+    logger.info(
+        f"[STREAM] end events={event_count} chunks={chunk_count} chars={total_chars} "
+        f"tool_detected={tool_detected} has_sent={has_sent}"
+    )
     return has_sent
 
 
@@ -89,6 +119,7 @@ def create_app(
     registry: ToolRegistry | None = None,
     workspace_root: str | None = None,
     db_path: str = ":memory:",
+    project_root: str | Path | None = None,
 ) -> FastAPI:
     """FastAPI 애플리케이션 생성.
 
@@ -120,6 +151,7 @@ def create_app(
     app = FastAPI(title="GP Claw", version="0.3.0", lifespan=lifespan)
     default_workspace = workspace_root or str(Path("~/.gp_claw/workspace").expanduser().resolve())
     room_manager = RoomManager(db_path)
+    sandbox_project_root = Path(project_root).resolve() if project_root else Path.cwd().resolve()
 
     # --- Pydantic models for request bodies ---
     class RoomTitleBody(BaseModel):
@@ -164,6 +196,195 @@ def create_app(
             await _checkpointer[0].adelete_thread(room_id)
         except Exception:
             pass
+        # sandbox/<room_id>/ 디렉토리 재귀 삭제 (성공기준 #6)
+        try:
+            cleanup_room_files(room_id, project_root=sandbox_project_root)
+        except Exception as cleanup_err:
+            logger.warning(f"Failed to cleanup sandbox files: {cleanup_err}")
+
+    # --- 파일 첨부 업로드 ---
+    async def _handle_file_upload(room_id: str, upload: UploadFile) -> JSONResponse:
+        """공통 업로드 처리 (multipart/form-data)."""
+        logger.info(
+            f"[UPLOAD] begin room_id={room_id!r} filename={upload.filename!r} "
+            f"content_type={upload.content_type!r}"
+        )
+        # 1) room_id 형식 + 존재 검증
+        if not is_valid_room_id(room_id):
+            return JSONResponse(
+                status_code=400,
+                content={"error": "유효하지 않은 room_id", "code": "INVALID_ROOM"},
+            )
+        if room_manager.get(room_id) is None:
+            return JSONResponse(
+                status_code=400,
+                content={"error": "존재하지 않는 room_id", "code": "INVALID_ROOM"},
+            )
+
+        # 2) 파일명 sanitize + 확장자 검증
+        original_name = upload.filename or "file"
+        safe_name = sanitize_filename(original_name)
+        try:
+            validate_extension(safe_name)
+        except FileUploadError as e:
+            return JSONResponse(
+                status_code=400, content={"error": e.message, "code": e.code}
+            )
+
+        # 3) 본문 읽기 + 크기 검증 (스트리밍 limit)
+        chunks: list[bytes] = []
+        total = 0
+        # 한도 + 1 byte까지만 읽어 초과 여부만 판정 (메모리 보호)
+        try:
+            while True:
+                chunk = await upload.read(64 * 1024)
+                if not chunk:
+                    break
+                total += len(chunk)
+                if total > MAX_FILE_SIZE_BYTES:
+                    return JSONResponse(
+                        status_code=400,
+                        content={
+                            "error": f"파일 크기가 한도(10MB)를 초과했습니다",
+                            "code": "TOO_LARGE",
+                        },
+                    )
+                chunks.append(chunk)
+        finally:
+            await upload.close()
+
+        try:
+            validate_size(total)
+        except FileUploadError as e:
+            return JSONResponse(
+                status_code=400, content={"error": e.message, "code": e.code}
+            )
+
+        # 4) 저장 경로 결정 (충돌 시 리네임) + 저장
+        sandbox_root = resolve_sandbox_root(sandbox_project_root)
+        try:
+            target_path = resolve_unique_path(sandbox_root, room_id, safe_name)
+        except FileUploadError as e:
+            return JSONResponse(
+                status_code=400, content={"error": e.message, "code": e.code}
+            )
+
+        body = b"".join(chunks)
+        try:
+            target_path.write_bytes(body)
+        except OSError as e:
+            logger.error(f"File write failed: {e}")
+            return JSONResponse(
+                status_code=500,
+                content={"error": "파일 저장 실패", "code": "WRITE_FAILED"},
+            )
+
+        # 5) 본문 추출 + 임계치 분기 + 메타 캐시 (동기 처리 — 자유 영역)
+        extraction_status: dict[str, Any] = {"extraction": "ready"}
+        try:
+            meta = await process_attachment(
+                file_path=target_path,
+                sandbox_root=sandbox_root,
+                room_id=room_id,
+                filename=target_path.name,
+                llm=llm,
+                threshold=SUMMARY_THRESHOLD_CHARS,
+            )
+            extraction_status = {
+                "extraction": "error" if meta.get("mode") == "error" else "ready",
+                "extraction_mode": meta.get("mode"),
+                "extracted_chars": meta.get("extracted_chars", 0),
+                "summary_chars": meta.get("summary_chars", 0),
+                "degraded": bool(meta.get("degraded")),
+                "extraction_error": meta.get("error"),
+            }
+        except Exception as ex:  # noqa: BLE001
+            logger.error(f"Attachment extraction failed: {ex}", exc_info=True)
+            extraction_status = {
+                "extraction": "error",
+                "extraction_mode": "error",
+                "degraded": True,
+                "extraction_error": str(ex),
+            }
+
+        # 6) 응답 — 항상 프로젝트 루트 기준 상대 경로
+        rel_path = relative_sandbox_path(target_path, sandbox_project_root)
+        logger.info(
+            f"[UPLOAD] ok room_id={room_id!r} path={rel_path!r} "
+            f"size={total} target={str(target_path)!r}"
+        )
+        return JSONResponse(
+            status_code=200,
+            content={
+                "path": rel_path,
+                "size": total,
+                "mime": guess_mime(safe_name),
+                "filename": target_path.name,
+                **extraction_status,
+            },
+        )
+
+    @app.post("/api/rooms/{room_id}/files")
+    async def upload_file_api(room_id: str, file: UploadFile = File(...)):
+        return await _handle_file_upload(room_id, file)
+
+    # 기존 라우팅 패턴(/rooms)과의 일관성을 위한 별칭
+    @app.post("/rooms/{room_id}/files")
+    async def upload_file(room_id: str, file: UploadFile = File(...)):
+        return await _handle_file_upload(room_id, file)
+
+    async def _serve_file(room_id: str, filename: str):
+        logger.info(f"[GET FILE] room_id={room_id!r} filename={filename!r}")
+        sandbox_root = resolve_sandbox_root(sandbox_project_root)
+        room_dir = (sandbox_root / room_id).resolve()
+        try:
+            room_dir.relative_to(sandbox_root)
+        except ValueError:
+            logger.warning(f"[GET FILE] INVALID_ROOM room_id={room_id!r}")
+            return JSONResponse(status_code=400, content={"error": "INVALID_ROOM"})
+        target = (room_dir / filename).resolve()
+        try:
+            target.relative_to(room_dir)
+        except ValueError:
+            logger.warning(f"[GET FILE] INVALID_PATH target={target!r}")
+            return JSONResponse(status_code=400, content={"error": "INVALID_PATH"})
+        if not target.is_file():
+            logger.warning(f"[GET FILE] NOT_FOUND target={target!r}")
+            return JSONResponse(status_code=404, content={"error": "NOT_FOUND"})
+        logger.info(f"[GET FILE] serving {target!r}")
+        return FileResponse(target, filename=target.name)
+
+    @app.get("/api/rooms/{room_id}/files/{filename}")
+    async def get_file_api(room_id: str, filename: str):
+        return await _serve_file(room_id, filename)
+
+    @app.get("/rooms/{room_id}/files/{filename}")
+    async def get_file(room_id: str, filename: str):
+        return await _serve_file(room_id, filename)
+
+    @app.get("/api/rooms/{room_id}/files/{filename}/extraction")
+    async def get_extraction_status(room_id: str, filename: str):
+        """추출 상태 폴링용 엔드포인트.
+
+        sandbox/<room_id>/.meta/<filename>.json 의 메타를 반환.
+        """
+        if not is_valid_room_id(room_id):
+            return JSONResponse(
+                status_code=400,
+                content={"error": "유효하지 않은 room_id", "code": "INVALID_ROOM"},
+            )
+        # filename 도 sanitize 일치하는지 검증
+        safe_name = sanitize_filename(filename)
+        sandbox_root = resolve_sandbox_root(sandbox_project_root)
+        meta = load_attachment_meta(
+            sandbox_root=sandbox_root, room_id=room_id, filename=safe_name
+        )
+        if meta is None:
+            return JSONResponse(
+                status_code=404,
+                content={"error": "메타가 없습니다", "code": "NOT_FOUND"},
+            )
+        return JSONResponse(status_code=200, content=meta)
 
     @app.get("/rooms/{room_id}/messages")
     async def get_room_messages(room_id: str):
@@ -348,9 +569,23 @@ def create_app(
 
                 elif data.get("type") == "user_message":
                     content = data.get("content", "")
+                    attachments = data.get("attachments") or []
+                    logger.info(
+                        f"[WS] user_message session={session_id} "
+                        f"len(content)={len(content)} attachments={len(attachments)} "
+                        f"agent_ready={bool(session_agent)} "
+                        f"preview={content[:120]!r}{'...' if len(content) > 120 else ''}"
+                    )
+                    if attachments:
+                        for a in attachments:
+                            logger.info(
+                                f"[WS]   attachment: path={a.get('path')!r} "
+                                f"size={a.get('size')} mime={a.get('mime')!r}"
+                            )
 
                     # Room 자동 생성/갱신
                     if not room_manager.get(session_id):
+                        logger.info(f"[WS] creating new room for session={session_id}")
                         room_manager.create(room_id=session_id)
                     room_manager.touch(session_id)
 
@@ -363,10 +598,23 @@ def create_app(
 
                     is_first_message = room_manager.get(session_id).title == "새 대화"
 
+                    # 첨부 본문을 LLM 컨텍스트로 prepend (spec 성공기준 #1, #2, #3)
+                    sandbox_root_path = resolve_sandbox_root(sandbox_project_root)
+                    llm_content = build_attachment_context(
+                        sandbox_root=sandbox_root_path,
+                        attachments=attachments if isinstance(attachments, list) else [],
+                        user_text=content,
+                    )
+
                     if session_agent:
                         try:
                             # 스트리밍 응답 (빈 스트림 시 1회 재시도)
-                            input_data = {"messages": [HumanMessage(content=content)]}
+                            logger.info(
+                                f"[WS] starting agent stream session={session_id} "
+                                f"llm_content_len={len(llm_content)} "
+                                f"prepended={len(llm_content) > len(content)}"
+                            )
+                            input_data = {"messages": [HumanMessage(content=llm_content)]}
                             try:
                                 streamed = await _stream_agent_response(
                                     session_agent, websocket, input_data, config,
@@ -485,6 +733,10 @@ def create_app(
                                     "title": auto_title,
                                 })
 
+                            logger.info(
+                                f"[WS] assistant_done session={session_id} "
+                                f"streamed={streamed}"
+                            )
                             await websocket.send_json({"type": "assistant_done"})
                         except ValueError as ve:
                             await _recover_thread()

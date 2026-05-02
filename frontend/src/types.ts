@@ -13,6 +13,27 @@ export interface ToolCall {
   preview: string
 }
 
+// --- Attachments ---
+export type ExtractionStatus = "ready" | "summarizing" | "error"
+export type ExtractionMode = "raw" | "summary" | "truncated" | "error"
+
+export interface FileAttachment {
+  /** project-root-relative path returned from upload, e.g. "sandbox/<roomId>/report.pdf" */
+  path: string
+  /** display filename (basename of path, after server-side sanitize/rename) */
+  filename: string
+  size: number
+  mime: string
+  /** 추출 상태 (서버 응답). 동기 처리 → 'ready' | 'error', 비동기 → 'summarizing' */
+  extraction?: ExtractionStatus
+  /** 추출 모드 — chip 표시에 사용 */
+  extraction_mode?: ExtractionMode
+  /** 본문 일부만 반영된 경우 true */
+  degraded?: boolean
+  /** 추출 실패 메시지 */
+  extraction_error?: string | null
+}
+
 // --- Messages (UI state) ---
 export interface UserMessage {
   id: string
@@ -20,6 +41,7 @@ export interface UserMessage {
   content: string
   timestamp: number
   serverMessageId?: number  // /rooms/{id}/messages 응답의 id (R-7 / FR-4 점프용)
+  attachments?: FileAttachment[]
 }
 
 export interface AssistantMessage {
@@ -58,7 +80,7 @@ export type Message = UserMessage | AssistantMessage | ApprovalRequestMessage | 
 
 // --- WebSocket protocol (wire format) ---
 export type WsSend =
-  | { type: "user_message"; content: string }
+  | { type: "user_message"; content: string; attachments?: FileAttachment[] }
   | { type: "approval_response"; decision: "approved" | "rejected" }
   | { type: "set_workspace"; path: string }
   | { type: "open_file"; path: string }

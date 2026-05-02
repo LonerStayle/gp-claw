@@ -11,6 +11,8 @@ export default defineConfig({
     },
   },
   server: {
+    port: 5173,
+    strictPort: true,
     proxy: {
       '/ws': {
         target: 'ws://localhost:8002',
@@ -23,6 +25,9 @@ export default defineConfig({
         target: 'http://localhost:8002',
       },
       '/search': {
+        target: 'http://localhost:8002',
+      },
+      '/api': {
         target: 'http://localhost:8002',
       },
     },

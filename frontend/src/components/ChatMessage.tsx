@@ -1,5 +1,6 @@
 import ReactMarkdown from "react-markdown"
 import remarkGfm from "remark-gfm"
+import { Paperclip } from "lucide-react"
 
 import { cn } from "@/lib/utils"
 import type { AssistantMessage, ErrorMessage, UserMessage } from "@/types"
@@ -33,6 +34,7 @@ export function ChatMessage({ message, highlightQuery }: ChatMessageProps) {
   const isUser = message.type === "user"
   const isError = message.type === "error"
   const isAssistant = message.type === "assistant"
+  const attachments = isUser ? (message as UserMessage).attachments : undefined
 
   return (
     <div className={cn("flex w-full flex-col", isUser ? "items-end" : "items-start")}>
@@ -51,7 +53,44 @@ export function ChatMessage({ message, highlightQuery }: ChatMessageProps) {
             </ReactMarkdown>
           </div>
         ) : (
-          <p className="whitespace-pre-wrap break-words">{renderHighlighted(message.content, highlightQuery)}</p>
+          <>
+            {message.content && (
+              <p className="whitespace-pre-wrap break-words">{renderHighlighted(message.content, highlightQuery)}</p>
+            )}
+            {/* 첨부 경로 chip — 메시지 본문에 임베딩 (다운로드 링크가 아닌 경로 문자열) */}
+            {attachments && attachments.length > 0 && (
+              <ul
+                className={cn(
+                  "flex flex-wrap gap-1.5",
+                  message.content ? "mt-2" : "",
+                )}
+                data-testid="attachment-chips"
+              >
+                {attachments.map((a) => {
+                  // path: "sandbox/<roomId>/<filename>" → "/api/rooms/<roomId>/files/<filename>"
+                  const parts = a.path.split("/")
+                  const href =
+                    parts.length >= 3 && parts[0] === "sandbox"
+                      ? `/api/rooms/${encodeURIComponent(parts[1])}/files/${encodeURIComponent(parts.slice(2).join("/"))}`
+                      : `/${a.path}`
+                  return (
+                    <li key={a.path} className="inline-flex">
+                      <a
+                        href={href}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="inline-flex items-center gap-1 rounded-md bg-primary-foreground/15 px-2 py-0.5 text-[11px] font-mono text-primary-foreground/95 ring-1 ring-primary-foreground/20 hover:bg-primary-foreground/25 hover:underline"
+                        title={`${a.path} · ${a.size} bytes · ${a.mime} (클릭하여 새 탭에서 열기)`}
+                      >
+                        <Paperclip className="h-3 w-3 opacity-80" />
+                        <span className="truncate max-w-[16rem]">{a.path}</span>
+                      </a>
+                    </li>
+                  )
+                })}
+              </ul>
+            )}
+          </>
         )}
       </div>
       <span className="mt-1 text-[10px] text-muted-foreground/60 px-1">
