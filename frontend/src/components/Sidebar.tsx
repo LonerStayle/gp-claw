@@ -30,6 +30,7 @@ export function Sidebar({
   const [editingId, setEditingId] = useState<string | null>(null)
   const [editValue, setEditValue] = useState("")
   const [deleteTarget, setDeleteTarget] = useState<Room | null>(null)
+  const [roomFilter, setRoomFilter] = useState("")
   const inputRef = useRef<HTMLInputElement>(null)
 
   const startRename = useCallback((room: Room, e: React.MouseEvent) => {
@@ -62,8 +63,24 @@ export function Sidebar({
     }
   }, [deleteTarget, onDeleteRoom])
 
+  const filtered = rooms.filter((r) =>
+    r.title.toLowerCase().includes(roomFilter.toLowerCase()),
+  )
+
   return (
     <aside className="flex w-64 flex-col border-r border-border bg-secondary">
+      {/* 방 이름 검색 */}
+      <div className="border-b p-2">
+        <input
+          type="text"
+          value={roomFilter}
+          onChange={(e) => setRoomFilter(e.target.value)}
+          placeholder="방 이름 검색…"
+          className="w-full rounded border px-2 py-1 text-xs"
+          aria-label="방 이름 검색"
+        />
+      </div>
+
       {/* 새 대화 버튼 */}
       <div className="p-3">
         <button
@@ -77,7 +94,7 @@ export function Sidebar({
 
       {/* 방 목록 */}
       <nav className="flex-1 overflow-y-auto px-2 pb-2">
-        {rooms.map((room) => {
+        {filtered.map((room) => {
           const isActive = room.id === activeRoomId
           const isEditing = room.id === editingId
 
