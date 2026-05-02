@@ -6,7 +6,7 @@ from pathlib import Path
 from typing import Any
 
 import aiosqlite
-from fastapi import FastAPI, WebSocket, WebSocketDisconnect
+from fastapi import FastAPI, Query, WebSocket, WebSocketDisconnect
 from fastapi.responses import JSONResponse
 from langchain_core.messages import AIMessage, HumanMessage
 from langchain_openai import ChatOpenAI
@@ -111,6 +111,8 @@ def create_app(
         await _checkpointer[0].setup()
         _agent[0] = create_agent(llm, registry=registry, checkpointer=_checkpointer[0]) if llm else None
         _msg_store[0] = MessageStore(db_path)  # 같은 DB 파일 사용 — 별도 테이블
+        _app.state.message_store = _msg_store[0]
+        _app.state.room_manager = room_manager
         yield
         _msg_store[0].close()
         await conn.close()
@@ -171,6 +173,38 @@ def create_app(
         if not _msg_store[0]:
             return []
         return _msg_store[0].list_by_room(room_id)
+
+    # --- Search REST API ---
+    @app.get("/search/messages")
+    async def search_messages(
+        q: str = Query(..., min_length=1),
+        room_id: list[str] | None = Query(default=None),
+        role: list[str] | None = Query(default=None),
+        date_from: str | None = Query(default=None, alias="from"),
+        date_to: str | None = Query(default=None, alias="to"),
+        limit: int = Query(default=50, ge=1, le=200),
+        offset: int = Query(default=0, ge=0),
+    ):
+        if not _msg_store[0]:
+            return {"total": 0, "items": []}
+        result = _msg_store[0].search(
+            q=q, room_ids=room_id, roles=role,
+            date_from=date_from, date_to=date_to,
+            limit=limit, offset=offset,
+        )
+        # 결과 항목에 room_title 채워넣기 (FR-3)
+        titles = {r.id: r.title for r in room_manager.list_all()}
+        for it in result["items"]:
+            it["room_title"] = titles.get(it["room_id"], "")
+        return result
+
+    @app.get("/search/rooms")
+    async def search_rooms(q: str = Query(default="")):
+        rooms = room_manager.list_all()
+        if not q:
+            return [asdict(r) for r in rooms]
+        ql = q.lower()
+        return [asdict(r) for r in rooms if ql in r.title.lower()]
 
     @app.websocket("/ws/{session_id}")
     async def websocket_endpoint(websocket: WebSocket, session_id: str):
