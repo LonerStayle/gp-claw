@@ -20,3 +20,5 @@ skills-lock.json
 
 # 첨부 파일 샌드박스
 sandbox/
+.ralph
+.vscode
