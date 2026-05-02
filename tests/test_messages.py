@@ -82,3 +82,33 @@ def test_pagination(store):
     assert len(page1["items"]) == 2 and len(page2["items"]) == 2
     assert page1["items"][0]["content"] == "item 4"  # latest first
     assert page2["items"][0]["content"] == "item 2"
+
+
+def test_persistent_integrity_error_is_bounded(store, monkeypatch):
+    """Persistent IntegrityError must raise after 1 retry, not recurse."""
+    call_count = {"n": 0}
+    real_conn = store._conn
+
+    class _ProxyConn:
+        """Wraps the real sqlite3.Connection but raises on INSERT INTO messages."""
+
+        def execute(self, sql, *args, **kwargs):
+            if "INSERT INTO messages" in sql:
+                call_count["n"] += 1
+                raise sqlite3.IntegrityError("simulated persistent failure")
+            return real_conn.execute(sql, *args, **kwargs)
+
+        def __enter__(self):
+            return real_conn.__enter__()
+
+        def __exit__(self, *args):
+            return real_conn.__exit__(*args)
+
+        def __getattr__(self, name):
+            return getattr(real_conn, name)
+
+    monkeypatch.setattr(store, "_conn", _ProxyConn())
+    with pytest.raises(sqlite3.IntegrityError):
+        store.append("r1", "user", "test")
+    # 1 initial attempt + 1 retry = 2 INSERT attempts max
+    assert call_count["n"] == 2, f"expected 2 INSERT attempts, got {call_count['n']}"

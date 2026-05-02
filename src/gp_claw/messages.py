@@ -3,7 +3,6 @@
 import re
 import sqlite3
 from datetime import datetime, timezone
-from typing import Iterable
 
 
 _TOOL_TAG_RE = re.compile(r"</?tool_call>.*", re.DOTALL)
@@ -49,6 +48,7 @@ class MessageStore:
         role: str,
         content: str,
         created_at: str | None = None,
+        _attempt: int = 0,
     ) -> int | None:
         # ⚠️ RISK(side-effect): <tool_call> 정제 — by R-5
         cleaned = _clean(content)
@@ -71,7 +71,9 @@ class MessageStore:
                 return cur.lastrowid
         except sqlite3.IntegrityError:
             # seq 충돌 시 1회 재시도 (단일 사용자 가정 — 거의 발생 안함)
-            return self.append(room_id, role, content, created_at)
+            if _attempt >= 1:
+                raise
+            return self.append(room_id, role, content, created_at, _attempt=_attempt + 1)
 
     def search(
         self,
