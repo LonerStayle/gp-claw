@@ -84,6 +84,15 @@ def test_pagination(store):
     assert page2["items"][0]["content"] == "item 2"
 
 
+def test_list_by_room_orders_by_seq(store):
+    store.append("r1", "user", "first")
+    store.append("r1", "assistant", "second")
+    store.append("r2", "user", "other")
+    msgs = store.list_by_room("r1")
+    assert [m["content"] for m in msgs] == ["first", "second"]
+    assert all("id" in m and "type" in m and "created_at" in m for m in msgs)
+
+
 def test_persistent_integrity_error_is_bounded(store, monkeypatch):
     """Persistent IntegrityError must raise after 1 retry, not recurse."""
     call_count = {"n": 0}

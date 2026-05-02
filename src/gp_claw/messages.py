@@ -139,5 +139,17 @@ class MessageStore:
             "created_at": row["created_at"],
         }
 
+    def list_by_room(self, room_id: str) -> list[dict]:
+        rows = self._conn.execute(
+            """SELECT id, role, content, created_at FROM messages
+               WHERE room_id = ? ORDER BY seq ASC""",
+            (room_id,),
+        ).fetchall()
+        return [
+            {"id": r["id"], "type": r["role"], "content": r["content"],
+             "created_at": r["created_at"]}
+            for r in rows
+        ]
+
     def close(self) -> None:
         self._conn.close()

@@ -15,6 +15,7 @@ from langgraph.types import Command
 from pydantic import BaseModel
 
 from gp_claw.agent import create_agent
+from gp_claw.messages import MessageStore
 from gp_claw.rooms import RoomManager
 from gp_claw.tools import create_tool_registry
 from gp_claw.tools.registry import ToolRegistry
@@ -100,6 +101,7 @@ def create_app(
     # Mutable holders — populated in lifespan (AsyncSqliteSaver needs event loop)
     _checkpointer = [None]
     _agent = [None]
+    _msg_store = [None]  # type: ignore[var-annotated]
 
     @asynccontextmanager
     async def lifespan(_app: FastAPI):
@@ -108,7 +110,9 @@ def create_app(
         _checkpointer[0] = AsyncSqliteSaver(conn)
         await _checkpointer[0].setup()
         _agent[0] = create_agent(llm, registry=registry, checkpointer=_checkpointer[0]) if llm else None
+        _msg_store[0] = MessageStore(db_path)  # 같은 DB 파일 사용 — 별도 테이블
         yield
+        _msg_store[0].close()
         await conn.close()
 
     app = FastAPI(title="GP Claw", version="0.3.0", lifespan=lifespan)
@@ -164,25 +168,9 @@ def create_app(
         room = room_manager.get(room_id)
         if not room:
             return JSONResponse(status_code=404, content={"detail": "Room not found"})
-        if not _agent[0]:
+        if not _msg_store[0]:
             return []
-        try:
-            state = await _agent[0].aget_state(
-                {"configurable": {"thread_id": room_id}}
-            )
-            msgs = state.values.get("messages", [])
-        except Exception:
-            return []
-        result = []
-        tool_tag_re = _re.compile(r"</?tool_call>.*", _re.DOTALL)
-        for m in msgs:
-            if isinstance(m, HumanMessage):
-                result.append({"type": "user", "content": m.content})
-            elif isinstance(m, AIMessage) and m.content:
-                cleaned = tool_tag_re.sub("", m.content).strip()
-                if cleaned:
-                    result.append({"type": "assistant", "content": cleaned})
-        return result
+        return _msg_store[0].list_by_room(room_id)
 
     @app.websocket("/ws/{session_id}")
     async def websocket_endpoint(websocket: WebSocket, session_id: str):
@@ -292,6 +280,14 @@ def create_app(
                     if not room_manager.get(session_id):
                         room_manager.create(room_id=session_id)
                     room_manager.touch(session_id)
+
+                    # Mirror write — user 메시지 (R-1: try/except로 본 흐름 보호)
+                    try:
+                        if _msg_store[0]:
+                            _msg_store[0].append(room_id=session_id, role="user", content=content)
+                    except Exception as e:
+                        logger.warning(f"MessageStore.append(user) failed: {e}")
+
                     is_first_message = room_manager.get(session_id).title == "새 대화"
 
                     if session_agent:
@@ -369,6 +365,24 @@ def create_app(
                                             })
                                     except (ValueError, TypeError):
                                         pass
+
+                            # Mirror write — assistant/tool 메시지들 (R-1)
+                            try:
+                                if _msg_store[0]:
+                                    for m in recent_msgs:
+                                        role = None
+                                        if isinstance(m, AIMessage):
+                                            role = "assistant"
+                                        elif hasattr(m, "type") and m.type == "tool":
+                                            role = "tool"
+                                        if role and getattr(m, "content", None):
+                                            _msg_store[0].append(
+                                                room_id=session_id,
+                                                role=role,
+                                                content=str(m.content),
+                                            )
+                            except Exception as e:
+                                logger.warning(f"MessageStore.append(assistant/tool) failed: {e}")
 
                             # Fallback: 스트리밍 이벤트 없으면 최종 메시지에서 가져옴
                             if not streamed:
