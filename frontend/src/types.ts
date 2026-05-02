@@ -19,6 +19,7 @@ export interface UserMessage {
   type: "user"
   content: string
   timestamp: number
+  serverMessageId?: number  // /rooms/{id}/messages 응답의 id (R-7 / FR-4 점프용)
 }
 
 export interface AssistantMessage {
@@ -26,6 +27,7 @@ export interface AssistantMessage {
   type: "assistant"
   content: string
   timestamp: number
+  serverMessageId?: number  // /rooms/{id}/messages 응답의 id (R-7 / FR-4 점프용)
 }
 
 export interface ApprovalRequestMessage {
@@ -77,3 +79,30 @@ export type WsReceive =
 
 // --- Connection status ---
 export type ConnectionStatus = "connected" | "disconnected" | "reconnecting"
+
+// --- Search ---
+export type MessageRole = "user" | "assistant" | "tool" | "system"
+
+export interface SearchResultItem {
+  id: number
+  room_id: string
+  room_title: string
+  role: MessageRole
+  content: string
+  snippet: string
+  match_offsets: [number, number][]
+  created_at: string
+}
+
+export interface SearchResponse {
+  total: number
+  items: SearchResultItem[]
+}
+
+export interface SearchFilter {
+  q: string
+  roomIds: string[]
+  roles: MessageRole[]
+  dateFrom?: string  // ISO
+  dateTo?: string    // ISO
+}
