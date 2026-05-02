@@ -3,9 +3,13 @@ import { ChatContainer } from "@/components/ChatContainer"
 import { ChatInput } from "@/components/ChatInput"
 import { ConnectionStatus } from "@/components/ConnectionStatus"
 import { FolderPicker } from "@/components/FolderPicker"
+import { SearchBar } from "@/components/SearchBar"
+import { SearchResults } from "@/components/SearchResults"
 import { Sidebar } from "@/components/Sidebar"
 import { useRooms } from "@/hooks/useRooms"
+import { useSearch } from "@/hooks/useSearch"
 import { useWebSocket } from "@/hooks/useWebSocket"
+import type { SearchFilter } from "@/types"
 import { Cog, PanelLeftClose, PanelLeftOpen } from "lucide-react"
 
 function App() {
@@ -40,6 +44,31 @@ function App() {
     setWorkspace,
     openFile,
   } = useWebSocket(activeRoomId, handleRoomTitleUpdate)
+
+  // 검색 상태
+  const [searchFilter, setSearchFilter] = useState<SearchFilter>({
+    q: "",
+    roomIds: [],
+    roles: [],
+  })
+  const [pendingScroll, setPendingScroll] = useState<{
+    messageId: number
+    query: string
+  } | null>(null)
+
+  const search = useSearch(searchFilter)
+  const isSearchMode = searchFilter.q.length > 0
+
+  const handleJump = useCallback(
+    (roomId: string, messageId: number, query: string) => {
+      selectRoom(roomId)
+      setSearchFilter({ q: "", roomIds: [], roles: [] })
+      setPendingScroll({ messageId, query })
+    },
+    [selectRoom]
+  )
+
+  const handleScrolled = useCallback(() => setPendingScroll(null), [])
 
   // 키보드 단축키: Cmd+Shift+O → 새 대화
   useEffect(() => {
@@ -99,20 +128,43 @@ function App() {
           <ConnectionStatus status={connectionStatus} />
         </header>
 
-        {/* Chat */}
+        {/* Chat / Search */}
         {activeRoomId ? (
           <>
-            <ChatContainer
-              messages={messages}
-              isWaitingResponse={isWaitingResponse}
-              onApprove={() => sendApproval("approved")}
-              onReject={() => sendApproval("rejected")}
-              onOpenFile={openFile}
+            <SearchBar
+              rooms={rooms}
+              filter={searchFilter}
+              onChange={setSearchFilter}
+              onClear={() => setSearchFilter({ q: "", roomIds: [], roles: [] })}
             />
-            <ChatInput
-              onSend={sendMessage}
-              disabled={isWaitingResponse || isWaitingApproval || connectionStatus !== "connected"}
-            />
+            {isSearchMode ? (
+              <SearchResults
+                query={searchFilter.q}
+                items={search.data?.items ?? null}
+                total={search.data?.total ?? 0}
+                loading={search.loading}
+                error={search.error}
+                canLoadMore={search.canLoadMore}
+                onLoadMore={search.loadMore}
+                onJump={handleJump}
+              />
+            ) : (
+              <>
+                <ChatContainer
+                  messages={messages}
+                  isWaitingResponse={isWaitingResponse}
+                  onApprove={() => sendApproval("approved")}
+                  onReject={() => sendApproval("rejected")}
+                  onOpenFile={openFile}
+                  pendingScroll={pendingScroll}
+                  onScrolled={handleScrolled}
+                />
+                <ChatInput
+                  onSend={sendMessage}
+                  disabled={isWaitingResponse || isWaitingApproval || connectionStatus !== "connected"}
+                />
+              </>
+            )}
           </>
         ) : (
           <div className="flex flex-1 items-center justify-center text-muted-foreground">

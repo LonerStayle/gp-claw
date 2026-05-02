@@ -204,13 +204,16 @@ export function useWebSocket(
         const res = await fetch(`/rooms/${roomId}/messages`)
         if (cancelled) return
         if (res.ok) {
-          const history: { type: string; content: string }[] = await res.json()
-          const restored: Message[] = history.map((m) => ({
-            id: crypto.randomUUID(),
-            type: m.type as "user" | "assistant",
-            content: m.content,
-            timestamp: Date.now(),
-          }))
+          const history: { id: number; type: string; content: string; created_at: string }[] = await res.json()
+          const restored: Message[] = history
+            .filter((m) => m.type === "user" || m.type === "assistant")
+            .map((m) => ({
+              id: crypto.randomUUID(),
+              type: m.type as "user" | "assistant",
+              content: m.content,
+              timestamp: new Date(m.created_at).getTime(),
+              serverMessageId: m.id,
+            }))
           setMessages(restored)
         } else {
           setMessages([])
