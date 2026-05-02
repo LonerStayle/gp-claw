@@ -11,14 +11,37 @@ interface ChatContainerProps {
   onApprove: () => void
   onReject: () => void
   onOpenFile: (path: string) => void
+  pendingScroll?: { messageId: number; query: string } | null
+  onScrolled?: () => void
 }
 
-export function ChatContainer({ messages, isWaitingResponse, onApprove, onReject, onOpenFile }: ChatContainerProps) {
+export function ChatContainer({
+  messages,
+  isWaitingResponse,
+  onApprove,
+  onReject,
+  onOpenFile,
+  pendingScroll,
+  onScrolled,
+}: ChatContainerProps) {
   const bottomRef = useRef<HTMLDivElement>(null)
+  const messageRefs = useRef<Map<number, HTMLDivElement>>(new Map())
 
   useEffect(() => {
+    if (pendingScroll) return
     bottomRef.current?.scrollIntoView({ behavior: "smooth" })
-  }, [messages, isWaitingResponse])
+  }, [messages, isWaitingResponse, pendingScroll])
+
+  useEffect(() => {
+    if (!pendingScroll) return
+    const el = messageRefs.current.get(pendingScroll.messageId)
+    if (el) {
+      el.scrollIntoView({ behavior: "smooth", block: "center" })
+      el.classList.add("ring-2", "ring-yellow-400")
+      setTimeout(() => el.classList.remove("ring-2", "ring-yellow-400"), 2500)
+      onScrolled?.()
+    }
+  }, [pendingScroll, messages, onScrolled])
 
   return (
     <div className="flex-1 overflow-y-auto p-4 space-y-4">
@@ -32,20 +55,46 @@ export function ChatContainer({ messages, isWaitingResponse, onApprove, onReject
       )}
 
       {messages.map((msg) => {
+        const serverMessageId =
+          msg.type === "user" || msg.type === "assistant" ? msg.serverMessageId : undefined
+        const setRef = (el: HTMLDivElement | null) => {
+          if (serverMessageId == null) return
+          if (el) messageRefs.current.set(serverMessageId, el)
+          else messageRefs.current.delete(serverMessageId)
+        }
+        let inner: React.ReactNode
         if (msg.type === "approval_request") {
-          return (
+          inner = (
             <ApprovalCard
-              key={msg.id}
               message={msg}
               onApprove={onApprove}
               onReject={onReject}
             />
           )
+        } else if (msg.type === "file_card") {
+          inner = <FileCard message={msg} onOpen={onOpenFile} />
+        } else {
+          inner = (
+            <ChatMessage
+              message={msg}
+              highlightQuery={
+                pendingScroll && serverMessageId === pendingScroll.messageId
+                  ? pendingScroll.query
+                  : undefined
+              }
+            />
+          )
         }
-        if (msg.type === "file_card") {
-          return <FileCard key={msg.id} message={msg} onOpen={onOpenFile} />
-        }
-        return <ChatMessage key={msg.id} message={msg} />
+        return (
+          <div
+            key={msg.id}
+            ref={setRef}
+            data-msg-id={serverMessageId ?? ""}
+            className="rounded-md transition-all"
+          >
+            {inner}
+          </div>
+        )
       })}
 
       {isWaitingResponse && (

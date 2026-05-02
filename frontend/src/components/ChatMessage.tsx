@@ -6,6 +6,7 @@ import type { AssistantMessage, ErrorMessage, UserMessage } from "@/types"
 
 interface ChatMessageProps {
   message: UserMessage | AssistantMessage | ErrorMessage
+  highlightQuery?: string
 }
 
 function formatTime(timestamp: number): string {
@@ -13,7 +14,22 @@ function formatTime(timestamp: number): string {
   return d.toLocaleTimeString("ko-KR", { hour: "2-digit", minute: "2-digit" })
 }
 
-export function ChatMessage({ message }: ChatMessageProps) {
+function renderHighlighted(text: string, query: string | undefined) {
+  if (!query) return <>{text}</>
+  const lower = text.toLowerCase()
+  const ql = query.toLowerCase()
+  const idx = lower.indexOf(ql)
+  if (idx < 0) return <>{text}</>
+  return (
+    <>
+      {text.slice(0, idx)}
+      <mark className="bg-yellow-200">{text.slice(idx, idx + query.length)}</mark>
+      {text.slice(idx + query.length)}
+    </>
+  )
+}
+
+export function ChatMessage({ message, highlightQuery }: ChatMessageProps) {
   const isUser = message.type === "user"
   const isError = message.type === "error"
   const isAssistant = message.type === "assistant"
@@ -35,7 +51,7 @@ export function ChatMessage({ message }: ChatMessageProps) {
             </ReactMarkdown>
           </div>
         ) : (
-          <p className="whitespace-pre-wrap break-words">{message.content}</p>
+          <p className="whitespace-pre-wrap break-words">{renderHighlighted(message.content, highlightQuery)}</p>
         )}
       </div>
       <span className="mt-1 text-[10px] text-muted-foreground/60 px-1">
