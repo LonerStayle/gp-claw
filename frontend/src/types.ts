@@ -13,12 +13,23 @@ export interface ToolCall {
   preview: string
 }
 
+// --- Attachments ---
+export interface FileAttachment {
+  /** project-root-relative path returned from upload, e.g. "sandbox/<roomId>/report.pdf" */
+  path: string
+  /** display filename (basename of path, after server-side sanitize/rename) */
+  filename: string
+  size: number
+  mime: string
+}
+
 // --- Messages (UI state) ---
 export interface UserMessage {
   id: string
   type: "user"
   content: string
   timestamp: number
+  attachments?: FileAttachment[]
 }
 
 export interface AssistantMessage {
@@ -56,7 +67,7 @@ export type Message = UserMessage | AssistantMessage | ApprovalRequestMessage | 
 
 // --- WebSocket protocol (wire format) ---
 export type WsSend =
-  | { type: "user_message"; content: string }
+  | { type: "user_message"; content: string; attachments?: FileAttachment[] }
   | { type: "approval_response"; decision: "approved" | "rejected" }
   | { type: "set_workspace"; path: string }
   | { type: "open_file"; path: string }

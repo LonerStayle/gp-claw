@@ -6,7 +6,7 @@ from pathlib import Path
 from typing import Any
 
 import aiosqlite
-from fastapi import FastAPI, WebSocket, WebSocketDisconnect
+from fastapi import FastAPI, File, UploadFile, WebSocket, WebSocketDisconnect
 from fastapi.responses import JSONResponse
 from langchain_core.messages import AIMessage, HumanMessage
 from langchain_openai import ChatOpenAI
@@ -15,6 +15,19 @@ from langgraph.types import Command
 from pydantic import BaseModel
 
 from gp_claw.agent import create_agent
+from gp_claw.files import (
+    FileUploadError,
+    cleanup_room_files,
+    guess_mime,
+    is_valid_room_id,
+    relative_sandbox_path,
+    resolve_sandbox_root,
+    resolve_unique_path,
+    sanitize_filename,
+    validate_extension,
+    validate_size,
+    MAX_FILE_SIZE_BYTES,
+)
 from gp_claw.rooms import RoomManager
 from gp_claw.tools import create_tool_registry
 from gp_claw.tools.registry import ToolRegistry
@@ -88,6 +101,7 @@ def create_app(
     registry: ToolRegistry | None = None,
     workspace_root: str | None = None,
     db_path: str = ":memory:",
+    project_root: str | Path | None = None,
 ) -> FastAPI:
     """FastAPI 애플리케이션 생성.
 
@@ -114,6 +128,7 @@ def create_app(
     app = FastAPI(title="GP Claw", version="0.3.0", lifespan=lifespan)
     default_workspace = workspace_root or str(Path("~/.gp_claw/workspace").expanduser().resolve())
     room_manager = RoomManager(db_path)
+    sandbox_project_root = Path(project_root).resolve() if project_root else Path.cwd().resolve()
 
     # --- Pydantic models for request bodies ---
     class RoomTitleBody(BaseModel):
@@ -158,6 +173,105 @@ def create_app(
             await _checkpointer[0].adelete_thread(room_id)
         except Exception:
             pass
+        # sandbox/<room_id>/ 디렉토리 재귀 삭제 (성공기준 #6)
+        try:
+            cleanup_room_files(room_id, project_root=sandbox_project_root)
+        except Exception as cleanup_err:
+            logger.warning(f"Failed to cleanup sandbox files: {cleanup_err}")
+
+    # --- 파일 첨부 업로드 ---
+    async def _handle_file_upload(room_id: str, upload: UploadFile) -> JSONResponse:
+        """공통 업로드 처리 (multipart/form-data)."""
+        # 1) room_id 형식 + 존재 검증
+        if not is_valid_room_id(room_id):
+            return JSONResponse(
+                status_code=400,
+                content={"error": "유효하지 않은 room_id", "code": "INVALID_ROOM"},
+            )
+        if room_manager.get(room_id) is None:
+            return JSONResponse(
+                status_code=400,
+                content={"error": "존재하지 않는 room_id", "code": "INVALID_ROOM"},
+            )
+
+        # 2) 파일명 sanitize + 확장자 검증
+        original_name = upload.filename or "file"
+        safe_name = sanitize_filename(original_name)
+        try:
+            validate_extension(safe_name)
+        except FileUploadError as e:
+            return JSONResponse(
+                status_code=400, content={"error": e.message, "code": e.code}
+            )
+
+        # 3) 본문 읽기 + 크기 검증 (스트리밍 limit)
+        chunks: list[bytes] = []
+        total = 0
+        # 한도 + 1 byte까지만 읽어 초과 여부만 판정 (메모리 보호)
+        try:
+            while True:
+                chunk = await upload.read(64 * 1024)
+                if not chunk:
+                    break
+                total += len(chunk)
+                if total > MAX_FILE_SIZE_BYTES:
+                    return JSONResponse(
+                        status_code=400,
+                        content={
+                            "error": f"파일 크기가 한도(10MB)를 초과했습니다",
+                            "code": "TOO_LARGE",
+                        },
+                    )
+                chunks.append(chunk)
+        finally:
+            await upload.close()
+
+        try:
+            validate_size(total)
+        except FileUploadError as e:
+            return JSONResponse(
+                status_code=400, content={"error": e.message, "code": e.code}
+            )
+
+        # 4) 저장 경로 결정 (충돌 시 리네임) + 저장
+        sandbox_root = resolve_sandbox_root(sandbox_project_root)
+        try:
+            target_path = resolve_unique_path(sandbox_root, room_id, safe_name)
+        except FileUploadError as e:
+            return JSONResponse(
+                status_code=400, content={"error": e.message, "code": e.code}
+            )
+
+        body = b"".join(chunks)
+        try:
+            target_path.write_bytes(body)
+        except OSError as e:
+            logger.error(f"File write failed: {e}")
+            return JSONResponse(
+                status_code=500,
+                content={"error": "파일 저장 실패", "code": "WRITE_FAILED"},
+            )
+
+        # 5) 응답 — 항상 프로젝트 루트 기준 상대 경로
+        rel_path = relative_sandbox_path(target_path, sandbox_project_root)
+        return JSONResponse(
+            status_code=200,
+            content={
+                "path": rel_path,
+                "size": total,
+                "mime": guess_mime(safe_name),
+                "filename": target_path.name,
+            },
+        )
+
+    @app.post("/api/rooms/{room_id}/files")
+    async def upload_file_api(room_id: str, file: UploadFile = File(...)):
+        return await _handle_file_upload(room_id, file)
+
+    # 기존 라우팅 패턴(/rooms)과의 일관성을 위한 별칭
+    @app.post("/rooms/{room_id}/files")
+    async def upload_file(room_id: str, file: UploadFile = File(...)):
+        return await _handle_file_upload(room_id, file)
 
     @app.get("/rooms/{room_id}/messages")
     async def get_room_messages(room_id: str):
