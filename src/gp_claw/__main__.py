@@ -1,3 +1,5 @@
+import logging
+
 import uvicorn
 
 from gp_claw.config import Settings
@@ -7,6 +9,12 @@ from gp_claw.tools import create_tool_registry
 
 
 def main():
+    logging.basicConfig(
+        level=logging.INFO,
+        format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
+        datefmt="%H:%M:%S",
+        force=True,
+    )
     settings = Settings()
 
     llm = None

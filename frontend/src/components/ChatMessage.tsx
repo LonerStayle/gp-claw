@@ -50,16 +50,28 @@ export function ChatMessage({ message }: ChatMessageProps) {
                 )}
                 data-testid="attachment-chips"
               >
-                {attachments.map((a) => (
-                  <li
-                    key={a.path}
-                    className="inline-flex items-center gap-1 rounded-md bg-primary-foreground/15 px-2 py-0.5 text-[11px] font-mono text-primary-foreground/95 ring-1 ring-primary-foreground/20"
-                    title={`${a.path} · ${a.size} bytes · ${a.mime}`}
-                  >
-                    <Paperclip className="h-3 w-3 opacity-80" />
-                    <span className="truncate max-w-[16rem]">{a.path}</span>
-                  </li>
-                ))}
+                {attachments.map((a) => {
+                  // path: "sandbox/<roomId>/<filename>" → "/api/rooms/<roomId>/files/<filename>"
+                  const parts = a.path.split("/")
+                  const href =
+                    parts.length >= 3 && parts[0] === "sandbox"
+                      ? `/api/rooms/${encodeURIComponent(parts[1])}/files/${encodeURIComponent(parts.slice(2).join("/"))}`
+                      : `/${a.path}`
+                  return (
+                    <li key={a.path} className="inline-flex">
+                      <a
+                        href={href}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="inline-flex items-center gap-1 rounded-md bg-primary-foreground/15 px-2 py-0.5 text-[11px] font-mono text-primary-foreground/95 ring-1 ring-primary-foreground/20 hover:bg-primary-foreground/25 hover:underline"
+                        title={`${a.path} · ${a.size} bytes · ${a.mime} (클릭하여 새 탭에서 열기)`}
+                      >
+                        <Paperclip className="h-3 w-3 opacity-80" />
+                        <span className="truncate max-w-[16rem]">{a.path}</span>
+                      </a>
+                    </li>
+                  )
+                })}
               </ul>
             )}
           </>

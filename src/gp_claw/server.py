@@ -7,7 +7,7 @@ from typing import Any
 
 import aiosqlite
 from fastapi import FastAPI, File, UploadFile, WebSocket, WebSocketDisconnect
-from fastapi.responses import JSONResponse
+from fastapi.responses import FileResponse, JSONResponse
 from langchain_core.messages import AIMessage, HumanMessage
 from langchain_openai import ChatOpenAI
 from langgraph.checkpoint.sqlite.aio import AsyncSqliteSaver
@@ -48,8 +48,13 @@ async def _stream_agent_response(
     pending = ""
     tool_detected = False
     has_sent = False
+    event_count = 0
+    chunk_count = 0
+    total_chars = 0
+    logger.info(f"[STREAM] begin (input_messages={len(input_data.get('messages', [])) if isinstance(input_data, dict) else 'n/a'})")
 
     async for event in agent.astream_events(input_data, config, version="v2"):
+        event_count += 1
         if event["event"] != "on_chat_model_stream":
             continue
         chunk = event["data"]["chunk"]
@@ -59,6 +64,8 @@ async def _stream_agent_response(
         if tool_detected:
             continue
 
+        chunk_count += 1
+        total_chars += len(chunk.content)
         pending += chunk.content
 
         # 완전한 <tool_call> 태그 발견
@@ -93,6 +100,10 @@ async def _stream_agent_response(
         )
         has_sent = True
 
+    logger.info(
+        f"[STREAM] end events={event_count} chunks={chunk_count} chars={total_chars} "
+        f"tool_detected={tool_detected} has_sent={has_sent}"
+    )
     return has_sent
 
 
@@ -182,6 +193,10 @@ def create_app(
     # --- 파일 첨부 업로드 ---
     async def _handle_file_upload(room_id: str, upload: UploadFile) -> JSONResponse:
         """공통 업로드 처리 (multipart/form-data)."""
+        logger.info(
+            f"[UPLOAD] begin room_id={room_id!r} filename={upload.filename!r} "
+            f"content_type={upload.content_type!r}"
+        )
         # 1) room_id 형식 + 존재 검증
         if not is_valid_room_id(room_id):
             return JSONResponse(
@@ -254,6 +269,10 @@ def create_app(
 
         # 5) 응답 — 항상 프로젝트 루트 기준 상대 경로
         rel_path = relative_sandbox_path(target_path, sandbox_project_root)
+        logger.info(
+            f"[UPLOAD] ok room_id={room_id!r} path={rel_path!r} "
+            f"size={total} target={str(target_path)!r}"
+        )
         return JSONResponse(
             status_code=200,
             content={
@@ -272,6 +291,35 @@ def create_app(
     @app.post("/rooms/{room_id}/files")
     async def upload_file(room_id: str, file: UploadFile = File(...)):
         return await _handle_file_upload(room_id, file)
+
+    async def _serve_file(room_id: str, filename: str):
+        logger.info(f"[GET FILE] room_id={room_id!r} filename={filename!r}")
+        sandbox_root = resolve_sandbox_root(sandbox_project_root)
+        room_dir = (sandbox_root / room_id).resolve()
+        try:
+            room_dir.relative_to(sandbox_root)
+        except ValueError:
+            logger.warning(f"[GET FILE] INVALID_ROOM room_id={room_id!r}")
+            return JSONResponse(status_code=400, content={"error": "INVALID_ROOM"})
+        target = (room_dir / filename).resolve()
+        try:
+            target.relative_to(room_dir)
+        except ValueError:
+            logger.warning(f"[GET FILE] INVALID_PATH target={target!r}")
+            return JSONResponse(status_code=400, content={"error": "INVALID_PATH"})
+        if not target.is_file():
+            logger.warning(f"[GET FILE] NOT_FOUND target={target!r}")
+            return JSONResponse(status_code=404, content={"error": "NOT_FOUND"})
+        logger.info(f"[GET FILE] serving {target!r}")
+        return FileResponse(target, filename=target.name)
+
+    @app.get("/api/rooms/{room_id}/files/{filename}")
+    async def get_file_api(room_id: str, filename: str):
+        return await _serve_file(room_id, filename)
+
+    @app.get("/rooms/{room_id}/files/{filename}")
+    async def get_file(room_id: str, filename: str):
+        return await _serve_file(room_id, filename)
 
     @app.get("/rooms/{room_id}/messages")
     async def get_room_messages(room_id: str):
@@ -401,9 +449,23 @@ def create_app(
 
                 elif data.get("type") == "user_message":
                     content = data.get("content", "")
+                    attachments_meta = data.get("attachments") or []
+                    logger.info(
+                        f"[WS] user_message session={session_id} "
+                        f"len(content)={len(content)} attachments={len(attachments_meta)} "
+                        f"agent_ready={bool(session_agent)} "
+                        f"preview={content[:120]!r}{'...' if len(content) > 120 else ''}"
+                    )
+                    if attachments_meta:
+                        for a in attachments_meta:
+                            logger.info(
+                                f"[WS]   attachment: path={a.get('path')!r} "
+                                f"size={a.get('size')} mime={a.get('mime')!r}"
+                            )
 
                     # Room 자동 생성/갱신
                     if not room_manager.get(session_id):
+                        logger.info(f"[WS] creating new room for session={session_id}")
                         room_manager.create(room_id=session_id)
                     room_manager.touch(session_id)
                     is_first_message = room_manager.get(session_id).title == "새 대화"
@@ -411,6 +473,7 @@ def create_app(
                     if session_agent:
                         try:
                             # 스트리밍 응답 (빈 스트림 시 1회 재시도)
+                            logger.info(f"[WS] starting agent stream session={session_id}")
                             input_data = {"messages": [HumanMessage(content=content)]}
                             try:
                                 streamed = await _stream_agent_response(
@@ -512,6 +575,10 @@ def create_app(
                                     "title": auto_title,
                                 })
 
+                            logger.info(
+                                f"[WS] assistant_done session={session_id} "
+                                f"streamed={streamed}"
+                            )
                             await websocket.send_json({"type": "assistant_done"})
                         except ValueError as ve:
                             await _recover_thread()
