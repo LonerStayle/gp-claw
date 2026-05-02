@@ -11,3 +11,9 @@ build/
 .ruff_cache/
 *.sqlite
 *.sqlite-journal
+
+# 외부 skill / agent manager가 자동 생성하는 사용자 개인 파일
+skills-lock.json
+.agent/
+.agents/
+.vscode/
