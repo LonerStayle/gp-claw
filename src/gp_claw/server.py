@@ -172,7 +172,46 @@ def create_app(
             return JSONResponse(status_code=404, content={"detail": "Room not found"})
         if not _msg_store[0]:
             return []
-        return _msg_store[0].list_by_room(room_id)
+        msgs = _msg_store[0].list_by_room(room_id)
+        if msgs:
+            return msgs
+        # ⚠️ RISK(breaking): mirror가 비어 있으면 LangGraph 체크포인트 fallback (R-3 완화)
+        # 백필 미실행 기존 사용자가 빈 채팅을 보지 않도록.
+        if not _agent[0]:
+            return []
+        try:
+            state = await _agent[0].aget_state(
+                {"configurable": {"thread_id": room_id}}
+            )
+            cp_msgs = state.values.get("messages", [])
+        except Exception:
+            return []
+        result = []
+        tool_tag_re = _re.compile(r"</?tool_call>.*", _re.DOTALL)
+        synthetic_id = 0
+        # 체크포인트에는 메시지별 timestamp가 없으므로 room.updated_at(또는 현재시각)을 통일 적용.
+        # ⚠️ RISK(breaking): synthetic timestamp — 검색·정렬에는 사용되지 않음(이 경로의 결과는 search 미러도 거치지 않음).
+        from datetime import datetime as _dt, timezone as _tz
+        fallback_ts = room.updated_at or _dt.now(_tz.utc).isoformat()
+        for m in cp_msgs:
+            synthetic_id += 1
+            if isinstance(m, HumanMessage):
+                result.append({
+                    "id": -synthetic_id,
+                    "type": "user",
+                    "content": m.content,
+                    "created_at": fallback_ts,
+                })
+            elif isinstance(m, AIMessage) and m.content:
+                cleaned = tool_tag_re.sub("", m.content).strip()
+                if cleaned:
+                    result.append({
+                        "id": -synthetic_id,
+                        "type": "assistant",
+                        "content": cleaned,
+                        "created_at": fallback_ts,
+                    })
+        return result
 
     # --- Search REST API ---
     @app.get("/search/messages")

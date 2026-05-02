@@ -22,6 +22,9 @@ export default defineConfig({
       '/rooms': {
         target: 'http://localhost:8002',
       },
+      '/search': {
+        target: 'http://localhost:8002',
+      },
     },
   },
 })

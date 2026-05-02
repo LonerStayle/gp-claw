@@ -10,10 +10,11 @@ import { useRooms } from "@/hooks/useRooms"
 import { useSearch } from "@/hooks/useSearch"
 import { useWebSocket } from "@/hooks/useWebSocket"
 import type { SearchFilter } from "@/types"
-import { Cog, PanelLeftClose, PanelLeftOpen } from "lucide-react"
+import { Cog, PanelLeftClose, PanelLeftOpen, Search, X } from "lucide-react"
 
 function App() {
   const [sidebarOpen, setSidebarOpen] = useState(true)
+  const [searchOpen, setSearchOpen] = useState(false)
 
   const {
     rooms,
@@ -63,6 +64,7 @@ function App() {
     (roomId: string, messageId: number, query: string) => {
       selectRoom(roomId)
       setSearchFilter({ q: "", roomIds: [], roles: [] })
+      setSearchOpen(false)
       setPendingScroll({ messageId, query })
     },
     [selectRoom]
@@ -125,19 +127,36 @@ function App() {
             <span className="text-border">|</span>
             <FolderPicker currentWorkspace={currentWorkspace} onSetWorkspace={setWorkspace} />
           </div>
-          <ConnectionStatus status={connectionStatus} />
+          <div className="flex items-center gap-2">
+            <button
+              onClick={() => {
+                setSearchOpen((v) => {
+                  if (v) setSearchFilter({ q: "", roomIds: [], roles: [] })
+                  return !v
+                })
+              }}
+              className="rounded p-1 text-muted-foreground transition-colors hover:text-foreground"
+              title={searchOpen ? "검색 닫기" : "대화 전체 검색"}
+              aria-label={searchOpen ? "검색 닫기" : "대화 전체 검색"}
+            >
+              {searchOpen ? <X className="h-5 w-5" /> : <Search className="h-5 w-5" />}
+            </button>
+            <ConnectionStatus status={connectionStatus} />
+          </div>
         </header>
 
         {/* Chat / Search */}
         {activeRoomId ? (
           <>
-            <SearchBar
-              rooms={rooms}
-              filter={searchFilter}
-              onChange={setSearchFilter}
-              onClear={() => setSearchFilter({ q: "", roomIds: [], roles: [] })}
-            />
-            {isSearchMode ? (
+            {searchOpen && (
+              <SearchBar
+                rooms={rooms}
+                filter={searchFilter}
+                onChange={setSearchFilter}
+                onClear={() => setSearchFilter({ q: "", roomIds: [], roles: [] })}
+              />
+            )}
+            {searchOpen && isSearchMode ? (
               <SearchResults
                 query={searchFilter.q}
                 items={search.data?.items ?? null}
