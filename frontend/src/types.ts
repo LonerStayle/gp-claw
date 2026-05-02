@@ -14,6 +14,9 @@ export interface ToolCall {
 }
 
 // --- Attachments ---
+export type ExtractionStatus = "ready" | "summarizing" | "error"
+export type ExtractionMode = "raw" | "summary" | "truncated" | "error"
+
 export interface FileAttachment {
   /** project-root-relative path returned from upload, e.g. "sandbox/<roomId>/report.pdf" */
   path: string
@@ -21,6 +24,14 @@ export interface FileAttachment {
   filename: string
   size: number
   mime: string
+  /** 추출 상태 (서버 응답). 동기 처리 → 'ready' | 'error', 비동기 → 'summarizing' */
+  extraction?: ExtractionStatus
+  /** 추출 모드 — chip 표시에 사용 */
+  extraction_mode?: ExtractionMode
+  /** 본문 일부만 반영된 경우 true */
+  degraded?: boolean
+  /** 추출 실패 메시지 */
+  extraction_error?: string | null
 }
 
 // --- Messages (UI state) ---

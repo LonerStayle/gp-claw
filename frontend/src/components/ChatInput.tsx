@@ -1,6 +1,6 @@
 import { useState, useRef, useCallback, useEffect } from "react"
 import { Button } from "@/components/ui/button"
-import { Loader2, Paperclip, SendHorizonal, X } from "lucide-react"
+import { AlertTriangle, Loader2, Paperclip, SendHorizonal, X } from "lucide-react"
 import {
   ALLOWED_EXTENSIONS,
   MAX_FILE_SIZE,
@@ -18,16 +18,38 @@ interface ChatInputProps {
   roomId: string | null
 }
 
-/** 업로드 진행 중인 파일의 UI 상태. */
+/** 업로드 진행 중인 파일의 UI 상태.
+ * spec: chip 상태 5종
+ *  - uploading (0~99% 진행률)
+ *  - summarizing (LLM 요약 중)
+ *  - done (경로 chip + 본문 반영 완료)
+ *  - degraded (경고 아이콘, 일부만 반영)
+ *  - error (빨간 배지)
+ */
+export type ChipStatus =
+  | "uploading"
+  | "summarizing"
+  | "done"
+  | "degraded"
+  | "error"
+
 interface PendingUpload {
   id: string
   filename: string
   size: number
   progress: number // 0..1
-  status: "uploading" | "done" | "error"
+  status: ChipStatus
   errorMsg?: string
   /** 업로드 성공 시 서버 응답 — 메시지 전송 시 사용. */
   attachment?: FileAttachment
+}
+
+/** 서버 응답으로부터 chip 상태 결정. */
+export function deriveChipStatus(att: FileAttachment): ChipStatus {
+  if (att.extraction === "summarizing") return "summarizing"
+  if (att.extraction === "error") return "error"
+  if (att.degraded || att.extraction_mode === "truncated") return "degraded"
+  return "done"
 }
 
 const ACCEPT_ATTR = ALLOWED_EXTENSIONS.join(",")
@@ -48,10 +70,15 @@ export function ChatInput({ onSend, disabled, roomId }: ChatInputProps) {
     return () => clearTimeout(t)
   }, [feedback])
 
+  // 'done' 또는 'degraded' 첨부는 메시지에 포함 (degraded도 일부 본문 있음)
   const completedAttachments = pending
-    .filter((p) => p.status === "done" && p.attachment)
+    .filter(
+      (p) => (p.status === "done" || p.status === "degraded") && p.attachment,
+    )
     .map((p) => p.attachment as FileAttachment)
-  const hasUploading = pending.some((p) => p.status === "uploading")
+  const hasUploading = pending.some(
+    (p) => p.status === "uploading" || p.status === "summarizing",
+  )
   const hasAttachments = completedAttachments.length > 0
   const canSend =
     !disabled && !hasUploading && (input.trim().length > 0 || hasAttachments)
@@ -113,10 +140,25 @@ export function ChatInput({ onSend, disabled, roomId }: ChatInputProps) {
             ),
           )
         })
+        // 추출 상태 기반 chip 결정
+        const chipStatus = deriveChipStatus(res)
+        const errorMsg =
+          chipStatus === "error"
+            ? res.extraction_error ?? "본문 추출 실패"
+            : chipStatus === "degraded"
+              ? "본문 일부만 반영됨 (요약 실패 → 잘린 원문)"
+              : undefined
         setPending((prev) =>
           prev.map((p) =>
             p.id === id
-              ? { ...p, progress: 1, status: "done", attachment: res, filename: res.filename }
+              ? {
+                  ...p,
+                  progress: 1,
+                  status: chipStatus,
+                  attachment: res,
+                  filename: res.filename,
+                  errorMsg,
+                }
               : p,
           ),
         )
@@ -201,18 +243,35 @@ export function ChatInput({ onSend, disabled, roomId }: ChatInputProps) {
           {pending.map((p) => (
             <li
               key={p.id}
+              data-testid={`chip-${p.status}`}
+              data-chip-status={p.status}
               className={cn(
                 "flex items-center gap-2 rounded-md border px-2 py-1 text-xs",
-                p.status === "done" && "border-emerald-500/40 bg-emerald-500/10 text-emerald-300",
-                p.status === "uploading" && "border-border bg-secondary text-foreground/80",
-                p.status === "error" && "border-destructive/50 bg-destructive/10 text-red-300",
+                p.status === "done" &&
+                  "border-emerald-500/40 bg-emerald-500/10 text-emerald-300",
+                p.status === "uploading" &&
+                  "border-border bg-secondary text-foreground/80",
+                p.status === "summarizing" &&
+                  "border-blue-500/40 bg-blue-500/10 text-blue-300",
+                p.status === "degraded" &&
+                  "border-amber-500/40 bg-amber-500/10 text-amber-300",
+                p.status === "error" &&
+                  "border-destructive/50 bg-destructive/10 text-red-300",
               )}
-              title={p.attachment?.path ?? p.filename}
+              title={
+                p.status === "degraded"
+                  ? "일부만 반영됨 — 요약 실패로 앞부분만 LLM에 전달됨"
+                  : p.attachment?.path ?? p.filename
+              }
             >
               {p.status === "uploading" ? (
                 <Loader2 className="h-3 w-3 animate-spin" />
+              ) : p.status === "summarizing" ? (
+                <Loader2 className="h-3 w-3 animate-spin" />
               ) : p.status === "error" ? (
                 <X className="h-3 w-3" />
+              ) : p.status === "degraded" ? (
+                <AlertTriangle className="h-3 w-3" />
               ) : (
                 <Paperclip className="h-3 w-3" />
               )}
@@ -223,6 +282,12 @@ export function ChatInput({ onSend, disabled, roomId }: ChatInputProps) {
                 <span className="tabular-nums text-muted-foreground">
                   {Math.round(p.progress * 100)}%
                 </span>
+              )}
+              {p.status === "summarizing" && (
+                <span className="text-blue-300">— 요약 중</span>
+              )}
+              {p.status === "degraded" && (
+                <span className="text-amber-300">— 일부만 반영</span>
               )}
               {p.status === "error" && p.errorMsg && (
                 <span className="text-red-300">— {p.errorMsg}</span>
